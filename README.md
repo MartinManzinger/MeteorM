@@ -3,10 +3,11 @@
 Desktop Python application for tracking Meteor-M N2-3/N2-4 weather satellites
 and, incrementally, receiving and displaying live LRPT data with a HackRF One.
 
-The current build provides a hardware-free simulated receiver, live CelesTrak
-TLE retrieval, local SGP4 propagation, an offline Natural Earth world map,
-spectrum and constellation plots, a simulated image reconstruction, persistent
-settings, and a modular fixed-slot panel interface.
+The current build provides selectable simulated or receive-only HackRF One/GNU
+Radio acquisition, live CelesTrak TLE retrieval, local SGP4 propagation, an
+offline Natural Earth world map, live spectrum/waterfall and raw-IQ
+constellation plots, a simulated image reconstruction, persistent settings,
+and a modular fixed-slot panel interface.
 
 ## Quick start on a fresh Ubuntu system
 
@@ -39,6 +40,17 @@ choose **Allow Launching** if the desktop asks whether to trust it. The plain
 No virtual environment, package installation inside the repository, paid map
 API, or connected HackRF is required for the mock receiver.
 
+To enable a connected HackRF One on Ubuntu, also install the native receive
+stack before launching:
+
+```bash
+sudo apt install gnuradio soapysdr-module-hackrf hackrf
+```
+
+The system's HackRF udev permissions must allow the current user to access the
+device. The application never changes packages, permissions, or system
+configuration itself.
+
 ## Using the modular interface
 
 The application uses the fixed layout from `panel_layout.ods`. The map and log
@@ -59,7 +71,8 @@ standard controls and all custom map, spectrum, waterfall, constellation, and
 picture renderers, then saved in `settings.yaml`.
 
 The supplied application icon and Settings menu share the compact custom title
-strip with the window controls, avoiding a second menu row.
+strip with the window controls. The program name stays centered across the full
+window, avoiding a second menu row.
 
 The optional panels are:
 
@@ -70,9 +83,14 @@ The optional panels are:
   fading historical direction cues, half-hour local-time map markers, colored
   overlays, per-satellite information and SDR tuning from either the panel or a
   satellite's map context menu, and manual online refresh;
-- **SDR control** — current HackRF One-style device and RF settings;
-- **Live spectrum** — spectral power plot and bounded waterfall history;
-- **IQ constellation** — prepared complex symbol points;
+- **SDR control** — simulation/HackRF selection, asynchronous HackRF discovery,
+  synchronized numeric fields/sliders, immediate RF-setting updates,
+  receive-only lifecycle, sample counters, and backend errors;
+- **Live spectrum** — spectral power plot, bounded waterfall history, and the
+  active sample-source status; spectrum and waterfall share one aligned MHz
+  axis, and left-clicking either plot retunes the receiver to that frequency;
+- **IQ constellation** — prepared raw/simulated complex points (not yet
+  symbol-synchronized LRPT data);
 - **Decoded picture** — incrementally reconstructed LRPT image data.
 
 The application log is always loaded and cannot be closed. A panel that cannot
@@ -85,8 +103,33 @@ bus. They do not own or call one another. `main.py` owns settings, processing,
 tracking, backend lifecycle, and orchestration. `gui.py` owns shared panel
 contracts, latest state, the panel registry, and fixed panel slots. Satellite
 tracking runs only while the Satellite tracking panel is loaded; the mandatory
-map passively receives its snapshots. The simulated receiver remains
-independent of those panels.
+map passively receives its snapshots. The selected receiver remains independent
+of those panels. GNU Radio and the Soapy HackRF driver are imported only when
+the real device is selected, so the application still runs when those optional
+native dependencies or the hardware are absent.
+
+## Using a HackRF One
+
+1. Connect the HackRF One and load **SDR control**.
+2. Press **Discover**. Select a serial-specific entry when more than one device
+   is connected, or use **HackRF One (auto)** for the first available unit.
+3. Set center frequency, sample rate, bandwidth, and RX gains with either the
+   numeric fields or sliders. Sample rate is limited to full 1 MHz steps from
+   2 to 20 MS/s. Changes take effect and persist immediately; a running
+   receiver rebuilds its flowgraph when sample rate changes.
+4. Press **Start receiver**. Receivers are intentionally stopped when the
+   program opens. The SDR and spectrum panels show discovery,
+   startup, live sample counts, bounded-buffer drops, or the driver error.
+
+The real flowgraph runs in a disposable receiver process and uses compiled
+vector/decimation blocks before its bounded latest-IQ sink; it contains no radio
+sink and no transmit API/control. Settings can be retuned while running.
+Spectrum power and signal level are relative dBFS, not calibrated dBm. If the
+HackRF is unplugged, the run changes to an error state and any stuck native
+receiver process is ended; reconnect it and press **Start receiver** to create a
+fresh flowgraph.
+The receiver has been verified on connected hardware at 2, 3, and 10 MS/s. See
+`info/hackrf-integration.md` for the bridge contract, test scope, and diagnostics.
 
 ## Test
 
@@ -138,7 +181,8 @@ Implementation details and orbital-data assumptions are documented in
 
 ## Current limitations
 
-GNU Radio/HackRF acquisition, actual LRPT demodulation and decoding, pass
-prediction relative to the receiver, automatic discovery of frequency changes,
-and a Leaflet/OpenStreetMap view remain future milestones. The application is
-receive-only and contains no transmit path.
+Actual LRPT demodulation/decoding and real image reconstruction,
+receiver-relative pass prediction, automatic discovery of frequency changes,
+hardware-in-the-loop reconnect testing, and a Leaflet/OpenStreetMap view remain
+future milestones. The application is receive-only and contains no transmit
+path.

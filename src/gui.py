@@ -35,6 +35,11 @@ APPLICATION_ICON_PATH = (
     Path(__file__).resolve().parent.parent / "info" / "master_icon.png"
 )
 APPEARANCE_MODES = ("green", "dark", "normal")
+SIMULATION_DEVICE = "Simulated HackRF One"
+HACKRF_AUTO_DEVICE = "HackRF One (auto)"
+RECEIVER_SAMPLE_RATE_MIN_HZ = 2_000_000.0
+RECEIVER_SAMPLE_RATE_MAX_HZ = 20_000_000.0
+RECEIVER_SAMPLE_RATE_STEP_HZ = 1_000_000.0
 
 
 def normalize_appearance_mode(appearance_mode: str) -> str:
@@ -54,7 +59,7 @@ class ReceiverSettings:
     lna_gain_db: int = 24
     vga_gain_db: int = 28
     amplifier_enabled: bool = False
-    device: str = "Simulated HackRF One"
+    device: str = SIMULATION_DEVICE
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +85,20 @@ class ReceiverSnapshot:
     symbol_sync: bool
     frame_sync: bool
     packets_decoded: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReceiverStatus:
+    state: str = "stopped"
+    backend: str = "Simulation"
+    device: str = SIMULATION_DEVICE
+    message: str = "Receiver stopped"
+    samples_received: int = 0
+    dropped_buffers: int = 0
+
+    @property
+    def active(self) -> bool:
+        return self.state in {"discovering", "starting", "running"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +177,7 @@ class AppEventBus(QObject):
     receiver_start_requested = Signal()
     receiver_stop_requested = Signal()
     receiver_settings_requested = Signal(object)
+    receiver_devices_requested = Signal()
     location_requested = Signal(object)
     tle_refresh_requested = Signal(int)
     satellite_enabled_requested = Signal(int, bool)
@@ -167,6 +187,8 @@ class AppEventBus(QObject):
     orbit_snapshot = Signal(object)
     orbit_removed = Signal(int)
     receiver_running_changed = Signal(bool)
+    receiver_status_changed = Signal(object)
+    receiver_devices_updated = Signal(object)
     tracking_running_changed = Signal(bool)
     satellite_tracking_state_changed = Signal(int, bool)
     satellite_enabled_changed = Signal(int, bool)
@@ -181,6 +203,11 @@ class ApplicationState:
     receiver_settings: ReceiverSettings
     receiver_location: ReceiverLocation
     receiver_running: bool = False
+    receiver_status: ReceiverStatus = field(default_factory=ReceiverStatus)
+    receiver_devices: tuple[str, ...] = (
+        SIMULATION_DEVICE,
+        HACKRF_AUTO_DEVICE,
+    )
     tracking_running: bool = False
     receiver_snapshot: ReceiverSnapshot | None = None
     orbit_snapshots: dict[int, OrbitSnapshot] = field(default_factory=dict)
@@ -241,7 +268,7 @@ PANEL_SPECS = (
         "sdr",
         "SDR control",
         "panel_sdr",
-        "HackRF-style frequency, sample-rate, bandwidth, gain, and lifecycle controls.",
+        "Simulation or receive-only HackRF discovery, RF settings, and status.",
         4,
         0,
         4,
@@ -261,7 +288,7 @@ PANEL_SPECS = (
         "constellation",
         "IQ constellation",
         "panel_constellation",
-        "Bounded decoded I/Q symbol point cloud.",
+        "Bounded raw/simulated I/Q point cloud pending LRPT demodulation.",
         0,
         5,
         4,
@@ -488,8 +515,14 @@ class WindowTitleBar(QFrame):
         self.setFixedHeight(34)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(7, 2, 2, 2)
+        layout.setContentsMargins(7, 2, 7, 2)
         layout.setSpacing(3)
+        side_width = 120
+        self.left_controls = QWidget()
+        self.left_controls.setFixedWidth(side_width)
+        left_layout = QHBoxLayout(self.left_controls)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(3)
         self.icon_label = QLabel()
         self.icon_label.setObjectName("windowIcon")
         self.icon_label.setFixedSize(24, 24)
@@ -505,29 +538,39 @@ class WindowTitleBar(QFrame):
                     Qt.TransformationMode.SmoothTransformation,
                 )
             )
-        layout.addWidget(self.icon_label)
+        left_layout.addWidget(self.icon_label)
 
         self.settings_button = QToolButton()
         self.settings_button.setObjectName("titleMenuButton")
         self.settings_button.setText("Settings")
         self.settings_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        layout.addWidget(self.settings_button)
+        left_layout.addWidget(self.settings_button)
+        left_layout.addStretch()
+        layout.addWidget(self.left_controls)
+        layout.addStretch(1)
 
         self.title_label = QLabel(window.windowTitle())
         self.title_label.setObjectName("windowTitle")
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.title_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         layout.addWidget(self.title_label)
-        layout.addStretch()
+        layout.addStretch(1)
 
+        self.right_controls = QWidget()
+        self.right_controls.setFixedWidth(side_width)
+        right_layout = QHBoxLayout(self.right_controls)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(3)
         self.minimize_button = self._control_button("−", "Minimize")
         self.maximize_button = self._control_button("□", "Maximize")
         self.close_button = self._control_button("×", "Close", close=True)
         self.minimize_button.clicked.connect(window.showMinimized)
         self.maximize_button.clicked.connect(self._toggle_maximized)
         self.close_button.clicked.connect(window.close)
-        layout.addWidget(self.minimize_button)
-        layout.addWidget(self.maximize_button)
-        layout.addWidget(self.close_button)
+        right_layout.addWidget(self.minimize_button)
+        right_layout.addWidget(self.maximize_button)
+        right_layout.addWidget(self.close_button)
+        layout.addWidget(self.right_controls)
 
     @staticmethod
     def _control_button(

@@ -3,9 +3,9 @@
 ## Runtime ownership
 
 `main.py` is the composition root. It creates the settings store, mutable latest
-state, event bus, GUI shell, simulated receiver, satellite tracking services,
-and timers. `AppOrchestrator` is the only object that coordinates those
-services. It does not render widgets.
+state, event bus, GUI shell, selectable simulation/HackRF receiver, satellite
+tracking services, and timers. `AppOrchestrator` is the only object that
+coordinates those services. It does not render widgets.
 
 All non-visual service classes—configuration, simulation, signal preparation,
 TLE retrieval, SGP4 propagation, worker queues, and orchestration—are grouped
@@ -57,15 +57,24 @@ modules.
 
 ## Service demand
 
-The simulated receiver runs independently and publishes bounded snapshots.
-Panels may be added or removed without changing that pipeline. Satellite
+The selected receiver runs independently and publishes bounded snapshots.
+`ReceiverManager` keeps simulation available while `HackRFController` and its
+receive-only `GNUradioProcessBridge` provide the optional real path. The
+controller remains on an application worker thread while all native GNU
+Radio/Soapy objects live in a disposable child process, communicating through
+bounded control and latest-IQ queues. Panels may be added or removed without
+changing either pipeline. Satellite
 tracking is demand-driven: loading the Satellite tracking panel starts one
 worker per checked satellite, unchecking one stops only its worker, and
 unloading the panel stops both. Each worker reads cached TLE data without
 network access at startup. Only a satellite's explicit fetch request can
 request CelesTrak; successful validated data is stored in `settings.yaml`.
-TLE retrieval, SGP4 propagation, and receiver simulation remain outside the GUI
-thread. The mandatory map only consumes orbit and location events.
+TLE retrieval, SGP4 propagation, device discovery, GNU Radio control, and
+receiver processing remain outside the GUI thread. The mandatory map only
+consumes orbit and location events.
+
+The real receiver boundary, native dependencies, gain mapping, failure model,
+and receive-only flowgraph are specified in `info/hackrf-integration.md`.
 
 ## Adding a panel
 

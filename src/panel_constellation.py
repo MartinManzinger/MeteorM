@@ -1,4 +1,4 @@
-"""Optional decoded I/Q constellation panel and renderer."""
+"""Optional raw/simulated I/Q constellation panel and renderer."""
 
 from __future__ import annotations
 

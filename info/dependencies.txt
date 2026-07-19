@@ -24,7 +24,18 @@ python3-pyside6.qtwidgets
 python3-skyfield
 python3-pytest
 
+Optional real HackRF receiver
+-----------------------------
+gnuradio                    GNU Radio 3.10+ runtime and in-tree gr-soapy
+soapysdr-module-hackrf      SoapySDR HackRF device plugin
+hackrf                      hackrf_info discovery/diagnostic utility
+libhackrf0                  HackRF host library (normally pulled as dependency)
+
 Install command
 ---------------
 sudo apt install python3 python3-numpy python3-yaml \
   python3-pyside6.qtwidgets python3-skyfield python3-pytest
+
+To enable the real receiver on Ubuntu, additionally install:
+
+sudo apt install gnuradio soapysdr-module-hackrf hackrf

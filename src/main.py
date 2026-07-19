@@ -5,7 +5,10 @@ from __future__ import annotations
 import copy
 import logging
 import math
+import multiprocessing
 import queue
+import re
+import subprocess
 import sys
 import threading
 import time
@@ -27,6 +30,8 @@ from skyfield.api import EarthSatellite, load, wgs84
 
 from gui import (
     APPEARANCE_MODES,
+    HACKRF_AUTO_DEVICE,
+    SIMULATION_DEVICE,
     AppEventBus,
     ApplicationState,
     MainGUI,
@@ -34,9 +39,13 @@ from gui import (
     METEOR_M_N2_4,
     OrbitSnapshot,
     PanelContext,
+    RECEIVER_SAMPLE_RATE_MAX_HZ,
+    RECEIVER_SAMPLE_RATE_MIN_HZ,
+    RECEIVER_SAMPLE_RATE_STEP_HZ,
     ReceiverLocation,
     ReceiverSettings,
     ReceiverSnapshot,
+    ReceiverStatus,
     SatelliteDefinition,
     SatellitePosition,
     SpectrumFrame,
@@ -49,7 +58,7 @@ from panel_log import ApplicationLogController
 
 logger = logging.getLogger("meteor_m.main")
 settings_logger = logging.getLogger("meteor_m.settings")
-receiver_logger = logging.getLogger("meteor_m.simulator")
+receiver_logger = logging.getLogger("meteor_m.receiver")
 tle_logger = logging.getLogger("meteor_m.tle_provider")
 tracking_logger = logging.getLogger("meteor_m.tracking_service")
 
@@ -62,7 +71,7 @@ DEFAULT_DATA: dict[str, Any] = {
     "schema_version": 1,
     "receiver": {
         "location": {"latitude_deg": 52.52, "longitude_deg": 13.405},
-        "device": "Simulated HackRF One",
+        "device": SIMULATION_DEVICE,
         "center_frequency_hz": 137_900_000.0,
         "sample_rate_hz": 2_000_000.0,
         "filter_bandwidth_hz": 1_750_000.0,
@@ -99,9 +108,24 @@ class SettingsStore:
     def receiver_settings(self) -> ReceiverSettings:
         with self._lock:
             raw = self._data["receiver"]
+            requested_sample_rate = float(raw["sample_rate_hz"])
+            sample_rate_hz = min(
+                RECEIVER_SAMPLE_RATE_MAX_HZ,
+                max(
+                    RECEIVER_SAMPLE_RATE_MIN_HZ,
+                    round(requested_sample_rate / RECEIVER_SAMPLE_RATE_STEP_HZ)
+                    * RECEIVER_SAMPLE_RATE_STEP_HZ,
+                ),
+            )
+            if sample_rate_hz != requested_sample_rate:
+                settings_logger.warning(
+                    "Adjusted unsupported sample rate %.3f MS/s to %.0f MS/s",
+                    requested_sample_rate / 1e6,
+                    sample_rate_hz / 1e6,
+                )
             return ReceiverSettings(
                 center_frequency_hz=float(raw["center_frequency_hz"]),
-                sample_rate_hz=float(raw["sample_rate_hz"]),
+                sample_rate_hz=sample_rate_hz,
                 filter_bandwidth_hz=float(raw["filter_bandwidth_hz"]),
                 lna_gain_db=int(raw["lna_gain_db"]),
                 vga_gain_db=int(raw["vga_gain_db"]),
@@ -342,7 +366,31 @@ class ConstellationProcessor:
         return points
 
 
-class SimulationBackend:
+class ReceiverBackend(ABC):
+    """Common lifecycle and latest-value contract for receiver backends."""
+
+    @property
+    @abstractmethod
+    def running(self) -> bool: ...
+
+    @property
+    @abstractmethod
+    def status(self) -> ReceiverStatus: ...
+
+    @abstractmethod
+    def start(self) -> None: ...
+
+    @abstractmethod
+    def stop(self, timeout: float = 2.0) -> None: ...
+
+    @abstractmethod
+    def update_settings(self, settings: ReceiverSettings) -> None: ...
+
+    @abstractmethod
+    def take_latest(self) -> ReceiverSnapshot | None: ...
+
+
+class SimulationBackend(ReceiverBackend):
     """Hardware-free receiver backend with a bounded latest-snapshot queue."""
 
     def __init__(self, update_rate_hz: float = 12.0, queue_size: int = 2) -> None:
@@ -358,10 +406,17 @@ class SimulationBackend:
         self._constellation = ConstellationProcessor()
         self._rng = np.random.default_rng(23)
         self._image = np.zeros((420, 560, 3), dtype=np.uint8)
+        self._status_lock = threading.Lock()
+        self._status = ReceiverStatus()
 
     @property
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def status(self) -> ReceiverStatus:
+        with self._status_lock:
+            return self._status
 
     def start(self) -> None:
         if self.running:
@@ -371,6 +426,7 @@ class SimulationBackend:
             target=self._run, name="meteor-m-simulation", daemon=True
         )
         self._thread.start()
+        self._set_status("running", "Simulated IQ stream", 0)
         receiver_logger.info("Started simulated receive pipeline")
 
     def stop(self, timeout: float = 2.0) -> None:
@@ -378,6 +434,7 @@ class SimulationBackend:
         if self._thread is not None:
             self._thread.join(timeout)
         self._thread = None
+        self._set_status("stopped", "Receiver stopped", self.status.samples_received)
         receiver_logger.info("Stopped simulated receive pipeline")
 
     def update_settings(self, settings: ReceiverSettings) -> None:
@@ -446,6 +503,9 @@ class SimulationBackend:
                     packets_decoded=max(0, int((elapsed - 3.0) * 6.5)),
                 )
             )
+            self._set_status(
+                "running", "Simulated IQ stream", (frame_number + 1) * iq.size
+            )
             frame_number += 1
             self._stop_event.wait(
                 max(0.0, self._period - (time.monotonic() - tick_started))
@@ -485,6 +545,731 @@ class SimulationBackend:
                 204,
                 255,
             )
+
+    def _set_status(self, state: str, message: str, samples_received: int) -> None:
+        with self._status_lock:
+            self._status = ReceiverStatus(
+                state=state,
+                backend="Simulation",
+                device=SIMULATION_DEVICE,
+                message=message,
+                samples_received=samples_received,
+            )
+
+
+class ReceiverError(RuntimeError):
+    pass
+
+
+class GNUradioBridge:
+    """Receive-only GNU Radio/Soapy HackRF flowgraph with bounded IQ delivery."""
+
+    def __init__(
+        self,
+        settings: ReceiverSettings,
+        *,
+        block_size: int = 4096,
+        update_rate_hz: float = 12.0,
+        queue_size: int = 2,
+    ) -> None:
+        if block_size < 2048 or update_rate_hz <= 0 or queue_size < 1:
+            raise ValueError("invalid GNU Radio bridge buffering configuration")
+        self.block_size = block_size
+        self._update_rate_hz = update_rate_hz
+        self._period = 1.0 / update_rate_hz
+        self._iq_blocks: queue.Queue[NDArray[np.complex64]] = queue.Queue(
+            maxsize=queue_size
+        )
+        self._last_accepted = 0.0
+        self._pending = np.empty(block_size, dtype=np.complex64)
+        self._pending_count = 0
+        self._dropped_buffers = 0
+        self._samples_received = 0
+        self._top_block = None
+        self._source = None
+        self._vectorizer = None
+        self._analysis_decimator = None
+        self._sink = None
+        self._build(settings)
+
+    @property
+    def samples_received(self) -> int:
+        return self._samples_received
+
+    @property
+    def dropped_buffers(self) -> int:
+        return self._dropped_buffers
+
+    def _build(self, settings: ReceiverSettings) -> None:
+        self._validate_sample_rate(settings.sample_rate_hz)
+        try:
+            from gnuradio import blocks, gr, soapy
+        except (ImportError, OSError) as error:
+            raise ReceiverError(
+                "GNU Radio with the gr-soapy component is not available"
+            ) from error
+
+        bridge = self
+
+        class LatestIQSink(gr.sync_block):
+            def __init__(self) -> None:
+                super().__init__(
+                    name="meteor_m_latest_iq_sink",
+                    in_sig=[(np.complex64, bridge.block_size)],
+                    out_sig=None,
+                )
+
+            def work(self, input_items, output_items):
+                del output_items
+                vectors = input_items[0]
+                if len(vectors):
+                    bridge._accept_samples(vectors[-1])
+                return len(vectors)
+
+        device_args = self._device_args(settings.device)
+        try:
+            self._top_block = gr.top_block("meteor_m_hackrf_receive")
+            self._source = soapy.source(
+                "driver=hackrf", "fc32", 1, device_args, "", [""], [""]
+            )
+            self._configure_source(self._source, settings)
+            self._vectorizer = blocks.stream_to_vector(
+                gr.sizeof_gr_complex, self.block_size
+            )
+            vectors_per_update = self.analysis_decimation(
+                settings.sample_rate_hz, self.block_size, self._update_rate_hz
+            )
+            self._analysis_decimator = blocks.keep_one_in_n(
+                gr.sizeof_gr_complex * self.block_size, vectors_per_update
+            )
+            self._sink = LatestIQSink()
+            self._top_block.connect(
+                self._source,
+                self._vectorizer,
+                self._analysis_decimator,
+                self._sink,
+            )
+        except Exception as error:
+            self._top_block = None
+            self._source = None
+            self._vectorizer = None
+            self._analysis_decimator = None
+            self._sink = None
+            raise ReceiverError(
+                f"could not construct HackRF flowgraph: {error}"
+            ) from error
+
+    @staticmethod
+    def _configure_source(source: object, settings: ReceiverSettings) -> None:
+        source.set_sample_rate(0, settings.sample_rate_hz)
+        GNUradioBridge._configure_runtime_source(source, settings)
+
+    @staticmethod
+    def _configure_runtime_source(source: object, settings: ReceiverSettings) -> None:
+        source.set_bandwidth(0, settings.filter_bandwidth_hz)
+        source.set_frequency(0, settings.center_frequency_hz)
+        source.set_gain(0, "AMP", settings.amplifier_enabled)
+        source.set_gain(0, "LNA", settings.lna_gain_db)
+        source.set_gain(0, "VGA", settings.vga_gain_db)
+
+    @staticmethod
+    def _validate_sample_rate(sample_rate_hz: float) -> None:
+        if not (
+            RECEIVER_SAMPLE_RATE_MIN_HZ
+            <= sample_rate_hz
+            <= RECEIVER_SAMPLE_RATE_MAX_HZ
+        ):
+            raise ReceiverError(
+                "Sample rate must be between 2 and 20 MS/s for this application"
+            )
+        if sample_rate_hz % RECEIVER_SAMPLE_RATE_STEP_HZ:
+            raise ReceiverError("Sample rate must use full 1 MHz steps")
+
+    @staticmethod
+    def analysis_decimation(
+        sample_rate_hz: float, block_size: int, update_rate_hz: float
+    ) -> int:
+        return max(1, round(sample_rate_hz / (block_size * update_rate_hz)))
+
+    @staticmethod
+    def _device_args(device: str) -> str:
+        match = re.fullmatch(r"HackRF One \[([0-9A-Fa-f]+)\]", device.strip())
+        return f"serial={match.group(1)}" if match else ""
+
+    def start(self) -> None:
+        if self._top_block is None:
+            raise ReceiverError("HackRF flowgraph is not available")
+        self._top_block.start()
+
+    def stop(self, timeout: float = 2.0) -> None:
+        if self._top_block is not None:
+            top_block = self._top_block
+
+            def shutdown_flowgraph() -> None:
+                top_block.stop()
+                top_block.wait()
+
+            shutdown = threading.Thread(
+                target=shutdown_flowgraph,
+                name="meteor-m-gnuradio-stop",
+                daemon=True,
+            )
+            shutdown.start()
+            shutdown.join(timeout)
+            if shutdown.is_alive():
+                raise ReceiverError("GNU Radio flowgraph did not stop in time")
+
+    def update_settings(self, settings: ReceiverSettings) -> None:
+        if self._source is None:
+            raise ReceiverError("HackRF source is not available")
+        self._configure_runtime_source(self._source, settings)
+
+    def take_latest(self) -> NDArray[np.complex64] | None:
+        latest = None
+        while True:
+            try:
+                latest = self._iq_blocks.get_nowait()
+            except queue.Empty:
+                return latest
+
+    def _accept_samples(self, samples: NDArray[np.complex64]) -> None:
+        self._samples_received += int(samples.size)
+        now = time.monotonic()
+        if self._pending_count:
+            needed = self.block_size - self._pending_count
+            copied = min(needed, int(samples.size))
+            self._pending[self._pending_count : self._pending_count + copied] = samples[
+                :copied
+            ]
+            self._pending_count += copied
+            if self._pending_count == self.block_size:
+                self._queue_analysis_block(self._pending.copy(), now)
+                self._pending_count = 0
+            return
+        if samples.size < self.block_size:
+            self._pending[: samples.size] = samples
+            self._pending_count = int(samples.size)
+            return
+        self._queue_analysis_block(
+            np.asarray(samples[-self.block_size :], dtype=np.complex64).copy(), now
+        )
+
+    def _queue_analysis_block(
+        self, block: NDArray[np.complex64], accepted_at: float
+    ) -> None:
+        self._last_accepted = accepted_at
+        block.setflags(write=False)
+        try:
+            self._iq_blocks.put_nowait(block)
+            return
+        except queue.Full:
+            self._dropped_buffers += 1
+        try:
+            self._iq_blocks.get_nowait()
+        except queue.Empty:
+            pass
+        self._iq_blocks.put_nowait(block)
+
+
+def _run_gnuradio_process(
+    settings: ReceiverSettings,
+    block_size: int,
+    update_rate_hz: float,
+    iq_queue: Any,
+    command_queue: Any,
+    event_queue: Any,
+    stop_event: Any,
+) -> None:
+    """Own all GNU Radio/Soapy objects in a disposable child process."""
+    bridge = None
+    try:
+        bridge = GNUradioBridge(
+            settings,
+            block_size=block_size,
+            update_rate_hz=update_rate_hz,
+        )
+        bridge.start()
+        event_queue.put(("ready", ""))
+        while not stop_event.is_set():
+            while True:
+                try:
+                    settings = command_queue.get_nowait()
+                except queue.Empty:
+                    break
+                bridge.update_settings(settings)
+            iq = bridge.take_latest()
+            if iq is None:
+                stop_event.wait(0.01)
+                continue
+            item = (iq, bridge.samples_received, bridge.dropped_buffers)
+            try:
+                iq_queue.put_nowait(item)
+            except queue.Full:
+                try:
+                    iq_queue.get(timeout=0.01)
+                except queue.Empty:
+                    pass
+                try:
+                    iq_queue.put_nowait(item)
+                except queue.Full:
+                    pass
+    except Exception as error:
+        try:
+            event_queue.put_nowait(("error", str(error)))
+        except queue.Full:
+            pass
+    finally:
+        if bridge is not None:
+            bridge.stop()
+
+
+class GNUradioProcessBridge:
+    """Restartable process boundary around the native GNU Radio bridge."""
+
+    def __init__(
+        self,
+        settings: ReceiverSettings,
+        *,
+        block_size: int = 4096,
+        update_rate_hz: float = 12.0,
+        startup_timeout: float = 8.0,
+    ) -> None:
+        GNUradioBridge._validate_sample_rate(settings.sample_rate_hz)
+        self._settings = settings
+        self._block_size = block_size
+        self._update_rate_hz = update_rate_hz
+        self._startup_timeout = startup_timeout
+        self._process = None
+        self._iq_queue = None
+        self._command_queue = None
+        self._event_queue = None
+        self._stop_event = None
+        self._samples_received = 0
+        self._dropped_buffers = 0
+
+    @property
+    def samples_received(self) -> int:
+        return self._samples_received
+
+    @property
+    def dropped_buffers(self) -> int:
+        return self._dropped_buffers
+
+    def start(self) -> None:
+        if self._process is not None and self._process.is_alive():
+            return
+        context = multiprocessing.get_context("spawn")
+        self._iq_queue = context.Queue(maxsize=2)
+        self._command_queue = context.Queue(maxsize=4)
+        self._event_queue = context.Queue(maxsize=4)
+        self._stop_event = context.Event()
+        self._process = context.Process(
+            target=_run_gnuradio_process,
+            args=(
+                self._settings,
+                self._block_size,
+                self._update_rate_hz,
+                self._iq_queue,
+                self._command_queue,
+                self._event_queue,
+                self._stop_event,
+            ),
+            name="meteor-m-gnuradio",
+            daemon=True,
+        )
+        self._process.start()
+        deadline = time.monotonic() + self._startup_timeout
+        while time.monotonic() < deadline:
+            try:
+                kind, message = self._event_queue.get(timeout=0.05)
+            except queue.Empty:
+                if not self._process.is_alive():
+                    self.stop()
+                    raise ReceiverError("GNU Radio receiver process exited during startup")
+                continue
+            if kind == "ready":
+                return
+            self.stop()
+            raise ReceiverError(message or "GNU Radio receiver process failed")
+        self.stop()
+        raise ReceiverError("GNU Radio receiver process timed out during startup")
+
+    def stop(self, timeout: float = 2.0) -> None:
+        process = self._process
+        if process is None:
+            return
+        if self._stop_event is not None:
+            self._stop_event.set()
+        process.join(timeout)
+        if process.is_alive():
+            receiver_logger.warning(
+                "Terminating unresponsive GNU Radio receiver process"
+            )
+            process.terminate()
+            process.join(1.0)
+        if process.is_alive():
+            process.kill()
+            process.join(1.0)
+        self._process = None
+        self._close_queues()
+
+    def update_settings(self, settings: ReceiverSettings) -> None:
+        self._settings = settings
+        if self._command_queue is None:
+            return
+        try:
+            self._command_queue.put_nowait(settings)
+        except queue.Full:
+            try:
+                self._command_queue.get(timeout=0.01)
+            except queue.Empty:
+                pass
+            try:
+                self._command_queue.put_nowait(settings)
+            except queue.Full:
+                pass
+
+    def take_latest(self) -> NDArray[np.complex64] | None:
+        self._raise_process_error()
+        latest = None
+        if self._iq_queue is None:
+            return None
+        while True:
+            try:
+                latest, self._samples_received, self._dropped_buffers = (
+                    self._iq_queue.get_nowait()
+                )
+            except queue.Empty:
+                return latest
+
+    def _raise_process_error(self) -> None:
+        if self._event_queue is not None:
+            try:
+                kind, message = self._event_queue.get_nowait()
+            except queue.Empty:
+                pass
+            else:
+                if kind == "error":
+                    raise ReceiverError(message)
+        if self._process is not None and not self._process.is_alive():
+            raise ReceiverError("GNU Radio receiver process exited unexpectedly")
+
+    def _close_queues(self) -> None:
+        for transport in (
+            self._iq_queue,
+            self._command_queue,
+            self._event_queue,
+        ):
+            if transport is not None:
+                transport.close()
+                transport.cancel_join_thread()
+        self._iq_queue = None
+        self._command_queue = None
+        self._event_queue = None
+        self._stop_event = None
+
+
+class HackRFController(ReceiverBackend):
+    """Discover and run a HackRF bridge entirely outside the GUI thread."""
+
+    SERIAL_PATTERN = re.compile(r"Serial number:\s*([0-9A-Fa-f]+)")
+
+    def __init__(
+        self,
+        *,
+        bridge_factory: Callable[[ReceiverSettings], Any] = GNUradioProcessBridge,
+        device_probe: Callable[[], tuple[str, ...]] | None = None,
+        sample_timeout: float = 3.0,
+    ) -> None:
+        if sample_timeout <= 0:
+            raise ValueError("sample_timeout must be positive")
+        self._bridge_factory = bridge_factory
+        self._device_probe = device_probe or self.discover_devices
+        self._sample_timeout = sample_timeout
+        self._settings = ReceiverSettings(device=HACKRF_AUTO_DEVICE)
+        self._settings_lock = threading.Lock()
+        self._settings_revision = 0
+        self._snapshots: queue.Queue[ReceiverSnapshot] = queue.Queue(maxsize=2)
+        self._status_lock = threading.Lock()
+        self._status = ReceiverStatus(
+            backend="HackRF / GNU Radio",
+            device=HACKRF_AUTO_DEVICE,
+            message="Hardware receiver stopped",
+        )
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._spectrum = SpectrumProcessor()
+        self._constellation = ConstellationProcessor()
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def status(self) -> ReceiverStatus:
+        with self._status_lock:
+            return self._status
+
+    @classmethod
+    def discover_devices(cls, timeout: float = 4.0) -> tuple[str, ...]:
+        try:
+            result = subprocess.run(
+                ["hackrf_info"],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except FileNotFoundError as error:
+            raise ReceiverError("hackrf_info is not installed") from error
+        except subprocess.TimeoutExpired as error:
+            raise ReceiverError("HackRF discovery timed out") from error
+        output = f"{result.stdout}\n{result.stderr}"
+        serials = tuple(dict.fromkeys(cls.SERIAL_PATTERN.findall(output)))
+        if result.returncode != 0 or not serials:
+            detail = next(
+                (line.strip() for line in reversed(output.splitlines()) if line.strip()),
+                "no HackRF One detected",
+            )
+            raise ReceiverError(f"HackRF discovery failed: {detail}")
+        return tuple(f"HackRF One [{serial}]" for serial in serials)
+
+    def probe_devices(self) -> tuple[str, ...]:
+        return self._device_probe()
+
+    def start(self) -> None:
+        if self.running:
+            return
+        self._stop_event.clear()
+        self._set_status("discovering", "Looking for HackRF One")
+        self._thread = threading.Thread(
+            target=self._run, name="meteor-m-hackrf", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self, timeout: float = 4.0) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout)
+        if self._thread is not None and self._thread.is_alive():
+            self._set_status("error", "HackRF worker did not stop in time")
+            return
+        self._thread = None
+        if self.status.state != "error":
+            self._set_status("stopped", "Hardware receiver stopped")
+
+    def update_settings(self, settings: ReceiverSettings) -> None:
+        with self._settings_lock:
+            self._settings = settings
+            self._settings_revision += 1
+
+    def take_latest(self) -> ReceiverSnapshot | None:
+        latest = None
+        while True:
+            try:
+                latest = self._snapshots.get_nowait()
+            except queue.Empty:
+                return latest
+
+    def _run(self) -> None:
+        bridge = None
+        try:
+            devices = self.probe_devices()
+            with self._settings_lock:
+                settings = self._settings
+                applied_revision = self._settings_revision
+            if settings.device != HACKRF_AUTO_DEVICE and settings.device not in devices:
+                raise ReceiverError(
+                    f"Selected device is not connected: {settings.device}"
+                )
+            self._set_status(
+                "starting", "Constructing receive-only GNU Radio flowgraph"
+            )
+            bridge = self._bridge_factory(settings)
+            bridge.start()
+            last_sample_at = time.monotonic()
+            self._set_status("running", "Live complex samples", bridge=bridge)
+            while not self._stop_event.is_set():
+                with self._settings_lock:
+                    current_settings = self._settings
+                    revision = self._settings_revision
+                if revision != applied_revision:
+                    if current_settings.sample_rate_hz != settings.sample_rate_hz:
+                        self._set_status(
+                            "starting",
+                            "Restarting GNU Radio for the new sample rate",
+                            bridge=bridge,
+                        )
+                        self._clear_snapshots()
+                        bridge.stop()
+                        bridge = self._bridge_factory(current_settings)
+                        bridge.start()
+                        last_sample_at = time.monotonic()
+                    else:
+                        bridge.update_settings(current_settings)
+                    settings = current_settings
+                    applied_revision = revision
+                iq = bridge.take_latest()
+                if iq is None:
+                    if time.monotonic() - last_sample_at > self._sample_timeout:
+                        raise ReceiverError(
+                            "No IQ samples received; check the HackRF connection, "
+                            "then reconnect it and press Start receiver"
+                        )
+                    self._stop_event.wait(0.02)
+                    continue
+                last_sample_at = time.monotonic()
+                rms = float(np.sqrt(np.mean(np.square(np.abs(iq)))))
+                signal_level = 20.0 * math.log10(max(rms, 1e-12))
+                self._publish(
+                    ReceiverSnapshot(
+                        created_at=datetime.now(UTC),
+                        spectrum=self._spectrum.prepare(
+                            iq, settings.sample_rate_hz, settings.center_frequency_hz
+                        ),
+                        constellation=self._constellation.prepare(iq),
+                        image_rgb=None,
+                        image_lines=0,
+                        signal_level_dbfs=signal_level,
+                        symbol_sync=False,
+                        frame_sync=False,
+                        packets_decoded=0,
+                    )
+                )
+                self._set_status("running", "Live complex samples", bridge=bridge)
+        except Exception as error:
+            self._set_status("error", str(error), bridge=bridge)
+            receiver_logger.error("HackRF receive pipeline stopped: %s", error)
+        finally:
+            if bridge is not None:
+                try:
+                    bridge.stop()
+                except Exception as error:
+                    receiver_logger.warning(
+                        "Could not stop GNU Radio flowgraph: %s", error
+                    )
+
+    def _publish(self, snapshot: ReceiverSnapshot) -> None:
+        try:
+            self._snapshots.put_nowait(snapshot)
+            return
+        except queue.Full:
+            pass
+        try:
+            self._snapshots.get_nowait()
+        except queue.Empty:
+            pass
+        self._snapshots.put_nowait(snapshot)
+
+    def _clear_snapshots(self) -> None:
+        while True:
+            try:
+                self._snapshots.get_nowait()
+            except queue.Empty:
+                return
+
+    def _set_status(
+        self, state: str, message: str, *, bridge: GNUradioBridge | None = None
+    ) -> None:
+        with self._settings_lock:
+            device = self._settings.device
+        with self._status_lock:
+            self._status = ReceiverStatus(
+                state=state,
+                backend="HackRF / GNU Radio",
+                device=device,
+                message=message,
+                samples_received=bridge.samples_received if bridge else 0,
+                dropped_buffers=bridge.dropped_buffers if bridge else 0,
+            )
+
+
+class ReceiverManager:
+    """Select simulation or HackRF while keeping one orchestrator contract."""
+
+    def __init__(
+        self,
+        simulation: SimulationBackend | None = None,
+        hackrf: HackRFController | None = None,
+    ) -> None:
+        self.simulation = simulation or SimulationBackend()
+        self.hackrf = hackrf or HackRFController()
+        self._settings = ReceiverSettings()
+        self._active: ReceiverBackend = self.simulation
+        self._device_updates: queue.Queue[tuple[tuple[str, ...], str | None]] = (
+            queue.Queue(maxsize=1)
+        )
+        self._discovery_thread: threading.Thread | None = None
+
+    @property
+    def running(self) -> bool:
+        return self._active.running
+
+    @property
+    def status(self) -> ReceiverStatus:
+        return self._active.status
+
+    def start(self) -> None:
+        self._select_backend()
+        self._active.update_settings(self._settings)
+        self._active.start()
+
+    def stop(self, timeout: float = 4.0) -> None:
+        self._active.stop(timeout)
+
+    def update_settings(self, settings: ReceiverSettings) -> None:
+        was_active = self._active.status.active
+        selected = self._backend_for(settings)
+        if selected is not self._active and was_active:
+            self._active.stop()
+        self._settings = settings
+        self._active = selected
+        self._active.update_settings(settings)
+        if was_active and not self._active.status.active:
+            self._active.start()
+
+    def take_latest(self) -> ReceiverSnapshot | None:
+        return self._active.take_latest()
+
+    def request_device_discovery(self) -> None:
+        if self._discovery_thread is not None and self._discovery_thread.is_alive():
+            return
+
+        def discover() -> None:
+            try:
+                hardware = self.hackrf.probe_devices()
+                update = ((SIMULATION_DEVICE, HACKRF_AUTO_DEVICE, *hardware), None)
+            except Exception as error:
+                update = ((SIMULATION_DEVICE, HACKRF_AUTO_DEVICE), str(error))
+            try:
+                self._device_updates.put_nowait(update)
+            except queue.Full:
+                try:
+                    self._device_updates.get_nowait()
+                except queue.Empty:
+                    pass
+                self._device_updates.put_nowait(update)
+
+        self._discovery_thread = threading.Thread(
+            target=discover, name="meteor-m-hackrf-discovery", daemon=True
+        )
+        self._discovery_thread.start()
+
+    def take_device_update(self) -> tuple[tuple[str, ...], str | None] | None:
+        try:
+            return self._device_updates.get_nowait()
+        except queue.Empty:
+            return None
+
+    def _select_backend(self) -> None:
+        self._active = self._backend_for(self._settings)
+
+    def _backend_for(self, settings: ReceiverSettings) -> ReceiverBackend:
+        return (
+            self.hackrf
+            if settings.device.startswith("HackRF One")
+            else self.simulation
+        )
 
 
 class TLEProviderError(RuntimeError):
@@ -889,7 +1674,7 @@ class AppOrchestrator(QObject):
         bus: AppEventBus,
         state: ApplicationState,
         settings: SettingsStore,
-        receiver: SimulationBackend,
+        receiver: ReceiverManager | SimulationBackend,
         tracking_services: dict[int, SatelliteTrackingService],
     ) -> None:
         super().__init__(gui)
@@ -900,15 +1685,18 @@ class AppOrchestrator(QObject):
         self.receiver = receiver
         self.tracking_services = tracking_services
         self._reported_tracking_errors: dict[int, str] = {}
+        self._last_receiver_status: ReceiverStatus | None = None
         self.receiver_timer = QTimer(self)
         self.receiver_timer.setInterval(33)
         self.receiver_timer.timeout.connect(self._deliver_receiver_snapshot)
+        self.receiver_timer.start()
         self.tracking_timer = QTimer(self)
         self.tracking_timer.setInterval(200)
         self.tracking_timer.timeout.connect(self._deliver_orbit_snapshot)
         bus.receiver_start_requested.connect(self.start_receiver)
         bus.receiver_stop_requested.connect(self.stop_receiver)
         bus.receiver_settings_requested.connect(self.apply_receiver_settings)
+        bus.receiver_devices_requested.connect(self.discover_receiver_devices)
         bus.location_requested.connect(self.apply_location)
         bus.tle_refresh_requested.connect(self.refresh_tle)
         bus.satellite_enabled_requested.connect(self.set_satellite_enabled)
@@ -918,19 +1706,27 @@ class AppOrchestrator(QObject):
 
     @Slot()
     def start_receiver(self) -> None:
-        self.receiver.update_settings(self.state.receiver_settings)
-        self.receiver.start()
-        self.receiver_timer.start()
+        try:
+            self.receiver.update_settings(self.state.receiver_settings)
+            self.receiver.start()
+        except Exception as error:
+            logger.error("Could not start receiver: %s", error)
+            self.state.receiver_running = False
+            self.bus.receiver_running_changed.emit(False)
+            return
         self.state.receiver_running = True
         self.bus.receiver_running_changed.emit(True)
-        logger.info("Receiver started in simulation mode")
+        self._deliver_receiver_status(force=True)
+        logger.info(
+            "Receiver start requested for %s", self.state.receiver_settings.device
+        )
 
     @Slot()
     def stop_receiver(self) -> None:
-        self.receiver_timer.stop()
         self.receiver.stop()
         self.state.receiver_running = False
         self.bus.receiver_running_changed.emit(False)
+        self._deliver_receiver_status(force=True)
         logger.info("Receiver stopped")
 
     @Slot(object)
@@ -943,6 +1739,16 @@ class AppOrchestrator(QObject):
             return
         self.receiver.update_settings(receiver_settings)
         self.bus.receiver_settings_updated.emit(receiver_settings)
+        self._deliver_receiver_status(force=True)
+
+    @Slot()
+    def discover_receiver_devices(self) -> None:
+        request = getattr(self.receiver, "request_device_discovery", None)
+        if request is None:
+            self.bus.receiver_devices_updated.emit(self.state.receiver_devices)
+            return
+        request()
+        logger.info("HackRF device discovery requested")
 
     @Slot(object)
     def apply_location(self, location: ReceiverLocation) -> None:
@@ -1084,6 +1890,31 @@ class AppOrchestrator(QObject):
         if snapshot is not None:
             self.state.receiver_snapshot = snapshot
             self.bus.receiver_snapshot.emit(snapshot)
+        self._deliver_receiver_status()
+        take_device_update = getattr(self.receiver, "take_device_update", None)
+        if take_device_update is not None:
+            update = take_device_update()
+            if update is not None:
+                devices, error = update
+                self.state.receiver_devices = devices
+                self.bus.receiver_devices_updated.emit(devices)
+                if error:
+                    logger.warning("HackRF discovery: %s", error)
+                else:
+                    logger.info("HackRF discovery found %d device(s)", len(devices) - 2)
+
+    def _deliver_receiver_status(self, *, force: bool = False) -> None:
+        status = getattr(self.receiver, "status", None)
+        if status is None or (not force and status == self._last_receiver_status):
+            return
+        self._last_receiver_status = status
+        self.state.receiver_status = status
+        self.bus.receiver_status_changed.emit(status)
+        if status.active != self.state.receiver_running:
+            self.state.receiver_running = status.active
+            self.bus.receiver_running_changed.emit(status.active)
+        if status.state == "error":
+            logger.error("Receiver error: %s", status.message)
 
     @Slot()
     def _deliver_orbit_snapshot(self) -> None:
@@ -1157,6 +1988,9 @@ def main() -> int:
         log_verbosity=settings.log_verbosity(),
         appearance_mode=settings.appearance_mode(),
     )
+    receiver = ReceiverManager()
+    receiver.update_settings(state.receiver_settings)
+    state.receiver_status = receiver.status
     bus = AppEventBus()
     gui = MainGUI(PanelContext(bus, state), window_size=settings.window_size())
     log_controller = ApplicationLogController(gui, settings)
@@ -1174,7 +2008,7 @@ def main() -> int:
         bus,
         state,
         settings,
-        SimulationBackend(),
+        receiver,
         make_tracking_services(settings),
     )
     app.aboutToQuit.connect(orchestrator.shutdown)
@@ -1183,7 +2017,6 @@ def main() -> int:
     logger.info("Optional panels are imported only when loaded")
     gui.show()
     gui.load_initial_panels(settings.loaded_panels())
-    orchestrator.start_receiver()
     return app.exec()
 
 

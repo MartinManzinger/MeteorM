@@ -55,6 +55,57 @@ def test_icon_and_settings_share_the_custom_window_title_strip() -> None:
     assert window.title_bar.settings_button.menu() is window.settings_menu
     assert window.menuWidget() is None
     assert set(window._appearance_actions) == {"green", "dark", "normal"}
+    window.show()
+    app.processEvents()
+    title_center = window.title_bar.title_label.mapTo(
+        window.title_bar, window.title_bar.title_label.rect().center()
+    ).x()
+    assert title_center == pytest.approx(
+        window.title_bar.rect().center().x(), abs=1.0
+    )
+
+    window.close()
+    app.processEvents()
+
+
+def test_sdr_sliders_are_synchronized_and_apply_immediately() -> None:
+    app = QApplication.instance() or QApplication([])
+    window = make_window()
+    assert window.load_panel("sdr")
+    panel = window.panel_instance("sdr")
+    requests = []
+    window.context.bus.receiver_settings_requested.connect(requests.append)
+
+    assert not hasattr(panel, "apply_button")
+    assert panel.sample_rate.maximum() == pytest.approx(20.0)
+    assert panel.sample_rate_slider.maximum() == 20
+    panel.frequency_slider.setValue(138_125)
+    assert panel.frequency.value() == pytest.approx(138.125)
+    assert requests[-1].center_frequency_hz == pytest.approx(138_125_000.0)
+
+    panel.sample_rate_slider.setValue(3)
+    assert panel.sample_rate.value() == pytest.approx(3.0)
+    assert requests[-1].sample_rate_hz == pytest.approx(3_000_000.0)
+    panel.sample_rate.setValue(3.6)
+    assert panel.sample_rate.value() == pytest.approx(4.0)
+    assert panel.sample_rate_slider.value() == 4
+    assert requests[-1].sample_rate_hz == pytest.approx(4_000_000.0)
+
+    panel.bandwidth_slider.setValue(180)
+    assert panel.bandwidth.value() == pytest.approx(1.8)
+    assert requests[-1].filter_bandwidth_hz == pytest.approx(1_800_000.0)
+
+    panel.lna_gain_slider.setValue(37)
+    assert panel.lna_gain.value() == 40
+    assert requests[-1].lna_gain_db == 40
+
+    panel.vga_gain_slider.setValue(35)
+    assert panel.vga_gain.value() == 36
+    assert requests[-1].vga_gain_db == 36
+
+    panel.frequency.setValue(137.5)
+    assert panel.frequency_slider.value() == 137_500
+    assert requests[-1].center_frequency_hz == pytest.approx(137_500_000.0)
 
     window.close()
     app.processEvents()

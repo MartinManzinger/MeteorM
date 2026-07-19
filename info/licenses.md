@@ -14,6 +14,9 @@ packages. This inventory records the relevant upstream licenses.
 | Skyfield | Orbit calculations | MIT |
 | sgp4 | SGP4 propagation | MIT |
 | jplephem | Skyfield dependency | MIT |
+| GNU Radio / gr-soapy | Optional real receiver runtime | GPL-3.0-or-later (with separately licensed bundled portions) |
+| SoapyHackRF | Optional SoapySDR HackRF plugin | MIT |
+| libhackrf / HackRF tools | Optional hardware library and discovery utility | GPL-2.0-or-later |
 | pytest | Tests | MIT |
 | Natural Earth 1:110m land | Offline coastline data | Public domain |
 
@@ -26,6 +29,9 @@ Upstream license references:
 - [Skyfield repository](https://github.com/skyfielders/python-skyfield)
 - [python-sgp4 repository](https://github.com/brandon-rhodes/python-sgp4)
 - [jplephem repository](https://github.com/brandon-rhodes/python-jplephem)
+- [GNU Radio repository](https://github.com/gnuradio/gnuradio)
+- [SoapyHackRF repository](https://github.com/pothosware/SoapyHackRF)
+- [HackRF repository](https://github.com/greatscottgadgets/hackrf)
 - [pytest license](https://docs.pytest.org/en/stable/license.html)
 - [Natural Earth terms](https://www.naturalearthdata.com/about/terms-of-use/)
 

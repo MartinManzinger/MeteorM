@@ -53,8 +53,9 @@ connected HackRF.
 
 - The GUI uses a fixed six-column/eight-row panel grid.
 - A compact custom title strip contains `info/master_icon.png`, the Settings
-  menu, application title, and minimize/maximize/close controls. Do not restore
-  a separate menu row beneath it.
+  menu, a geometrically centered application title, and
+  minimize/maximize/close controls. Do not restore a separate menu row beneath
+  it.
 - The World map and Application log panels are mandatory and cannot be closed.
 - Optional panels are imported lazily. Their inactive space remains clickable
   in the assigned grid position; there is no separate panel-loader area.
@@ -77,10 +78,12 @@ The current panel files and responsibilities are:
   parsing, and synchronization with map-selected coordinates;
 - `panel_satellite_tracking.py` — two independent Meteor satellite controls,
   TLE status, manual fetch, information, and SDR tune actions;
-- `panel_sdr.py` — HackRF-style receiver settings and simulated receiver
-  lifecycle controls;
-- `panel_spectrum.py` — custom spectrum and bounded waterfall renderers;
-- `panel_constellation.py` — custom decoded-IQ point-cloud renderer;
+- `panel_sdr.py` — simulation/real-HackRF selection, discovery, synchronized
+  numeric/slider controls with immediate settings updates, lifecycle controls,
+  live sample counts, and backend errors;
+- `panel_spectrum.py` — aligned custom spectrum and bounded waterfall renderers
+  with one frequency axis, click-to-tune interaction, and active-source status;
+- `panel_constellation.py` — custom raw/simulated-IQ point-cloud renderer;
 - `panel_picture.py` — custom incremental image renderer, currently fed by
   simulated image data.
 
@@ -128,17 +131,43 @@ The current panel files and responsibilities are:
   that satellite's configured LRPT center frequency. Right-clicking elsewhere
   retains receiver-position selection.
 
-### Simulation and visualization
+### Receiver integration, simulation, and visualization
 
 - `SimulationBackend` provides a mock QPSK-like IQ stream and incremental image
   so the interface can be developed without hardware.
+- `ReceiverManager` selects simulation or the real HackRF backend from the
+  persisted device setting while preserving one orchestrator contract.
+- Startup configures the selected backend but intentionally leaves it stopped;
+  acquisition begins only after an explicit **Start receiver** request.
+- `HackRFController` performs `hackrf_info` discovery and owns settings,
+  lifecycle, status, error handling, and IQ processing on a worker thread.
+- `GNUradioBridge` lazily builds a receive-only GNU Radio 3.10 `gr-soapy`
+  flowgraph inside a dedicated child process: one complex-float Soapy HackRF
+  source passes through compiled stream-to-vector and keep-one-in-N blocks to a
+  custom bounded latest-IQ sink. About 12 analysis vectors per second cross the
+  bounded process queue regardless of the raw sample rate. There is no radio
+  sink or transmit API.
+- `GNUradioProcessBridge` terminates an unresponsive native receiver child after
+  USB removal, guaranteeing that its device handle is released before a fresh
+  receiver process is started.
+- Sample rate is constrained to full 1 MHz steps from 2 to 20 MS/s. Changing it
+  while running rebuilds the flowgraph; other RF settings update the live source.
+- A three-second IQ timeout ends a failed hardware run so reconnecting the
+  HackRF and pressing **Start receiver** creates a fresh worker and flowgraph.
+- Live HackRF IQ feeds the existing `SpectrumProcessor`, spectrum/waterfall,
+  and raw-IQ constellation path. Simulation remains the default and requires no
+  native SDR dependencies or connected device.
 - Receiver snapshots travel through a bounded queue.
 - `SpectrumProcessor` prepares NumPy FFT data outside GUI widgets.
 - `ConstellationProcessor` creates a bounded, normalized IQ point cloud.
 - Spectrum, waterfall, constellation, and image displays are custom application
   renderers; the final application must not depend on GNU Radio GUI sinks.
-- Real HackRF acquisition, LRPT demodulation, decoding, and image reconstruction
-  are not implemented yet. Current signal and image data are simulated.
+- Real HackRF acquisition has been verified with a connected HackRF One at
+  2, 3, and 10 MS/s: discovery, source construction, bounded complex64 IQ
+  delivery, live sample-rate rebuilding, spectrum/constellation snapshots,
+  status transitions, and clean shutdown all completed successfully. LRPT
+  demodulation, decoding, and real image
+  reconstruction are not implemented; picture data is still simulated.
 
 ### Logging and tests
 
@@ -152,7 +181,7 @@ The current panel files and responsibilities are:
   python3 -m pytest -q src/test
   ```
 
-- At the time of this rewrite, the full suite contains 38 passing tests.
+- At the time of this update, the full suite contains 52 passing tests.
 - GUI tests use Qt's offscreen platform through `src/test/conftest.py`.
 
 ## Required directory and code structure
@@ -170,6 +199,7 @@ MeteorM/
 ├── info/              Dependencies, licenses, and technical documentation
 │   ├── architecture.md
 │   ├── dependencies.txt
+│   ├── hackrf-integration.md
 │   ├── licenses.md
 │   ├── master_icon.png
 │   ├── natural-earth-license.txt
@@ -256,33 +286,30 @@ receiver pipeline.
 
 ## Open TODOs
 
-The next work begins at real receiver integration. The main unfinished items are:
+The main unfinished items are:
 
-1. Define and implement a replaceable `HackRFController` and actual HackRF
-   device discovery, selection, configuration, start/stop, and error recovery.
-2. Build the receive-only GNU Radio flowgraph and a documented `GNUradioBridge`
-   without mixing it into GUI code.
-3. Feed bounded live IQ/sample data from that bridge into the existing custom
-   spectrum and constellation pipeline while preserving simulation mode.
-4. Research and document the exact Meteor-M N2-3/N2-4 LRPT modulation,
+1. Extend hardware verification to physical disconnect/reconnect behavior, USB
+   contention, long-duration operation, and effective sample-rate/bandwidth
+   reporting from the driver.
+2. Research and document the exact Meteor-M N2-3/N2-4 LRPT modulation,
    symbol-rate, synchronization, interleaving, error-correction, packet, and
    image formats before implementing them.
-5. Implement `LRPTDemodulator` outside the GUI thread, including carrier/symbol
+3. Implement `LRPTDemodulator` outside the GUI thread, including carrier/symbol
    synchronization and useful receiver/demodulator status snapshots.
-6. Implement `LRPTDecoder` for frame synchronization, error correction, packet
+4. Implement `LRPTDecoder` for frame synchronization, error correction, packet
    parsing, and channel data. Do not invent uncertain protocol values.
-7. Implement `ImageAssembler` for incremental real LRPT image reconstruction
+5. Implement `ImageAssembler` for incremental real LRPT image reconstruction
    and replace the simulated picture source.
-8. Add receiver-relative visible-pass prediction: azimuth, elevation, rise,
+6. Add receiver-relative visible-pass prediction: azimuth, elevation, rise,
    culmination, set time, maximum elevation, and practical visibility cues.
-9. Verify current satellite transmission status/frequency handling and consider
+7. Verify current satellite transmission status/frequency handling and consider
    a documented way to update frequency information without aggressive online
    polling.
-10. Add hardware-in-the-loop tests, disconnect/reconnect handling, malformed
+8. Add hardware-in-the-loop tests, disconnect/reconnect handling, malformed
     stream handling, and end-to-end recorded-IQ fixtures.
-11. Evaluate an optional OpenStreetMap/Leaflet backend only if it materially
+9. Evaluate an optional OpenStreetMap/Leaflet backend only if it materially
     improves the map while preserving a free/offline-capable fallback.
-12. Improve packaging and fresh-system compatibility after the real native GNU
+10. Improve packaging and fresh-system compatibility after the real native GNU
     Radio/HackRF dependency set is known.
 
 ## Development sequence
@@ -297,8 +324,10 @@ Completed foundation:
 
 Continue incrementally with:
 
-5. HackRF/GNU Radio connection and simulation/real-backend selection.
-6. Live sample transport and receiver status.
+5. HackRF/GNU Radio connection and simulation/real-backend selection (complete
+   for the initial receive-only hardware milestone).
+6. Live sample transport and receiver status (complete for the initial
+   receive-only hardware milestone).
 7. LRPT demodulation and decoding.
 8. Live real-image reconstruction.
 9. Pass prediction, integration testing, and robust error handling.
