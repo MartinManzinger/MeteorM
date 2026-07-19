@@ -5,6 +5,7 @@ from main import SettingsStore
 def test_settings_store_persists_all_values_in_one_yaml_file(tmp_path) -> None:
     path = tmp_path / "settings.yaml"
     store = SettingsStore(path)
+    assert store.appearance_mode() == "green"
     receiver = ReceiverSettings(
         center_frequency_hz=137_100_000.0,
         sample_rate_hz=2_400_000.0,

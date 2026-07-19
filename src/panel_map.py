@@ -13,7 +13,13 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QMenu, QWidget
 
-from gui import OrbitSnapshot, PanelContext, ReceiverLocation, SatellitePosition
+from gui import (
+    OrbitSnapshot,
+    PanelContext,
+    ReceiverLocation,
+    SatellitePosition,
+    normalize_appearance_mode,
+)
 
 
 Coordinate = tuple[float, float]
@@ -75,6 +81,25 @@ def map_theme(appearance_mode: str) -> MapTheme:
             current_fill=QColor("#f8fbfc"),
             receiver_text=QColor("#503515"),
             label_shadow=QColor(255, 255, 255, 225),
+        )
+    if appearance_mode == "green":
+        return MapTheme(
+            canvas=QColor("#06100b"),
+            ocean_start=QColor("#0b3027"),
+            ocean_middle=QColor("#08281f"),
+            ocean_end=QColor("#061f18"),
+            grid=QColor(51, 112, 80, 135),
+            land_fill=QColor("#183e2d"),
+            land_glow=QColor(83, 164, 108, 70),
+            land_outline=QColor("#67ad79"),
+            coordinate_text=QColor(126, 177, 143, 160),
+            overlay_background=QColor(3, 18, 11, 200),
+            overlay_text=QColor("#c4dccb"),
+            border=QColor("#37684c"),
+            current_outline=QColor("#eefff3"),
+            current_fill=QColor("#07140d"),
+            receiver_text=QColor("#fff7e8"),
+            label_shadow=QColor(2, 13, 7, 215),
         )
     return MapTheme(
         canvas=QColor("#070e15"),
@@ -245,7 +270,7 @@ class OrbitMapWidget(QWidget):
         self._snapshots: dict[int, OrbitSnapshot] = {}
         self._tracking_errors: dict[int, str] = {}
         self._tracking_active = False
-        self._appearance_mode = "dark"
+        self._appearance_mode = "green"
         self._theme = map_theme(self._appearance_mode)
         self._land_geometry = load_land_geometry()
         self._land_path: QPainterPath | None = None
@@ -258,7 +283,7 @@ class OrbitMapWidget(QWidget):
         )
 
     def set_appearance(self, appearance_mode: str) -> None:
-        self._appearance_mode = "normal" if appearance_mode == "normal" else "dark"
+        self._appearance_mode = normalize_appearance_mode(appearance_mode)
         self._theme = map_theme(self._appearance_mode)
         self.update()
 

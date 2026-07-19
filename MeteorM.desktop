@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Meteor-M LRPT Station
+Comment=Track and receive Meteor-M LRPT weather satellites
+Exec=/home/martin/Desktop/MeteorM/launcher
+Path=/home/martin/Desktop/MeteorM
+Icon=/home/martin/Desktop/MeteorM/info/master_icon.png
+Terminal=false
+StartupNotify=true
+Categories=Science;

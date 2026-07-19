@@ -6,18 +6,18 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
-from gui import ComplexArray, PanelContext
+from gui import ComplexArray, PanelContext, normalize_appearance_mode
 
 
 class ConstellationWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._points: ComplexArray | None = None
-        self._appearance_mode = "dark"
+        self._appearance_mode = "green"
         self.setMinimumSize(240, 210)
 
     def set_appearance(self, appearance_mode: str) -> None:
-        self._appearance_mode = "normal" if appearance_mode == "normal" else "dark"
+        self._appearance_mode = normalize_appearance_mode(appearance_mode)
         self.update()
 
     def _colors(self) -> tuple[QColor, QColor, QColor, QColor]:
@@ -27,6 +27,13 @@ class ConstellationWidget(QWidget):
                 QColor("#c4ced8"),
                 QColor("#405466"),
                 QColor(22, 119, 74, 155),
+            )
+        if self._appearance_mode == "green":
+            return (
+                QColor("#0d1712"),
+                QColor("#294c37"),
+                QColor("#a8c6b2"),
+                QColor(113, 220, 153, 145),
             )
         return (
             QColor("#111925"),

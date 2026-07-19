@@ -13,15 +13,16 @@ receiver:
 satellite:
   enabled_norad_catalog_ids:
   - 57166
+  - 59051
   position_update_seconds: 1.0
   ground_track_refresh_seconds: 60.0
   tle_refresh_hours: 6.0
   tle_minimum_request_hours: 2.0
 interface:
   log_verbosity: INFO
-  appearance_mode: dark
+  appearance_mode: green
   window_width: 1920
-  window_height: 967
+  window_height: 1005
   loaded_panels:
   - satellite_tracking
   - sdr

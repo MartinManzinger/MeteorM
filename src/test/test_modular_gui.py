@@ -176,6 +176,17 @@ def test_appearance_menu_applies_and_persists_theme(tmp_path) -> None:
     assert constellation._appearance_mode == "dark"
     assert picture._appearance_mode == "dark"
 
+    window._appearance_actions["green"].trigger()
+    app.processEvents()
+    assert settings.appearance_mode() == "green"
+    assert context.state.appearance_mode == "green"
+    assert "#71dc99" in app.styleSheet()
+    assert window.map_panel._appearance_mode == "green"
+    assert spectrum.spectrum._appearance_mode == "green"
+    assert spectrum.waterfall._appearance_mode == "green"
+    assert constellation._appearance_mode == "green"
+    assert picture._appearance_mode == "green"
+
     orchestrator.shutdown()
     window.close()
     app.processEvents()

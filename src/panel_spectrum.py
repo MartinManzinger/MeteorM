@@ -10,7 +10,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QLabel, QSplitter, QVBoxLayout, QWidget
 
-from gui import PanelContext, SpectrumFrame
+from gui import PanelContext, SpectrumFrame, normalize_appearance_mode
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +29,13 @@ def chart_theme(appearance_mode: str) -> ChartTheme:
             QColor("#405466"),
             QColor("#007c9f"),
         )
+    if appearance_mode == "green":
+        return ChartTheme(
+            QColor("#0d1712"),
+            QColor("#294c37"),
+            QColor("#a8c6b2"),
+            QColor("#71dc99"),
+        )
     return ChartTheme(
         QColor("#111925"),
         QColor("#29384b"),
@@ -41,12 +48,12 @@ class SpectrumWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._frame: SpectrumFrame | None = None
-        self._appearance_mode = "dark"
+        self._appearance_mode = "green"
         self._theme = chart_theme(self._appearance_mode)
         self.setMinimumSize(360, 210)
 
     def set_appearance(self, appearance_mode: str) -> None:
-        self._appearance_mode = "normal" if appearance_mode == "normal" else "dark"
+        self._appearance_mode = normalize_appearance_mode(appearance_mode)
         self._theme = chart_theme(self._appearance_mode)
         self.update()
 
@@ -116,13 +123,13 @@ class WaterfallWidget(QWidget):
         self._frequency_bins = frequency_bins
         self._first_frequency_hz: float | None = None
         self._last_frequency_hz: float | None = None
-        self._appearance_mode = "dark"
+        self._appearance_mode = "green"
         self._theme = chart_theme(self._appearance_mode)
         self._colors = self._make_color_table(self._appearance_mode)
         self.setMinimumSize(360, 160)
 
     def set_appearance(self, appearance_mode: str) -> None:
-        self._appearance_mode = "normal" if appearance_mode == "normal" else "dark"
+        self._appearance_mode = normalize_appearance_mode(appearance_mode)
         self._theme = chart_theme(self._appearance_mode)
         self._colors = self._make_color_table(self._appearance_mode)
         self.update()
@@ -174,8 +181,8 @@ class WaterfallWidget(QWidget):
 
     @staticmethod
     def _make_color_table(appearance_mode: str) -> np.ndarray:
-        anchors = (
-            (
+        if appearance_mode == "normal":
+            anchors = (
                 (0.00, (245, 248, 252)),
                 (0.22, (198, 218, 236)),
                 (0.45, (54, 137, 166)),
@@ -183,8 +190,17 @@ class WaterfallWidget(QWidget):
                 (0.84, (225, 147, 45)),
                 (1.00, (151, 42, 57)),
             )
-            if appearance_mode == "normal"
-            else (
+        elif appearance_mode == "green":
+            anchors = (
+                (0.00, (3, 12, 7)),
+                (0.22, (10, 42, 24)),
+                (0.45, (22, 105, 59)),
+                (0.68, (83, 194, 118)),
+                (0.84, (219, 183, 77)),
+                (1.00, (255, 248, 220)),
+            )
+        else:
+            anchors = (
                 (0.00, (4, 9, 18)),
                 (0.22, (18, 41, 79)),
                 (0.45, (24, 126, 139)),
@@ -192,7 +208,6 @@ class WaterfallWidget(QWidget):
                 (0.84, (255, 180, 84)),
                 (1.00, (255, 247, 232)),
             )
-        )
         table = np.empty(256, dtype=np.uint32)
         for index in range(256):
             position = index / 255.0

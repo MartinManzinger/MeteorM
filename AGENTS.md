@@ -35,6 +35,8 @@ connected HackRF.
 
 - Python and PySide6 provide the desktop application.
 - The root `launcher` starts `src/main.py` and is intended to be double-clicked.
+- Root `MeteorM.desktop` is the icon-bearing Linux launcher and delegates to
+  `launcher`; the shell launcher remains the portable fallback.
 - The program does not use or create a virtual environment.
 - All persistent settings and cached runtime data live in the single
   repository-root `settings.yaml` file.
@@ -42,13 +44,17 @@ connected HackRF.
 - Persisted data includes receiver settings, receiver coordinates, enabled
   satellites, tracking intervals, window size, loaded panels, log verbosity,
   appearance mode, and validated TLE cache entries.
-- Dark and normal modes are available from **Settings -> Appearance**. Theme
-  changes apply immediately to standard widgets and every custom renderer and
-  are persisted in YAML.
+- Green is the standard appearance: a dark base with green-tinted chrome,
+  controls, map, and signal renderers. Dark and Normal remain available from
+  **Settings -> Appearance**. Theme changes apply immediately to standard
+  widgets and every custom renderer and are persisted in YAML.
 
 ### Modular GUI
 
 - The GUI uses a fixed six-column/eight-row panel grid.
+- A compact custom title strip contains `info/master_icon.png`, the Settings
+  menu, application title, and minimize/maximize/close controls. Do not restore
+  a separate menu row beneath it.
 - The World map and Application log panels are mandatory and cannot be closed.
 - Optional panels are imported lazily. Their inactive space remains clickable
   in the assigned grid position; there is no separate panel-loader area.
@@ -146,7 +152,7 @@ The current panel files and responsibilities are:
   python3 -m pytest -q src/test
   ```
 
-- At the time of this rewrite, the full suite contains 37 passing tests.
+- At the time of this rewrite, the full suite contains 38 passing tests.
 - GUI tests use Qt's offscreen platform through `src/test/conftest.py`.
 
 ## Required directory and code structure
@@ -158,12 +164,14 @@ MeteorM/
 ├── AGENTS.md          Current contributor/agent brief
 ├── README.md          Fresh-system setup and user quick start
 ├── launcher           Double-clickable application launcher
+├── MeteorM.desktop    Icon-bearing Linux desktop launcher
 ├── settings.yaml      The only application settings/cache file
 ├── .gitignore
 ├── info/              Dependencies, licenses, and technical documentation
 │   ├── architecture.md
 │   ├── dependencies.txt
 │   ├── licenses.md
+│   ├── master_icon.png
 │   ├── natural-earth-license.txt
 │   └── satellite-tracking.md
 └── src/

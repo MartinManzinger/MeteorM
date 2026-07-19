@@ -25,15 +25,16 @@ settings, and a modular fixed-slot panel interface.
    cd MeteorM
    ```
 
-3. Ensure the launcher is executable, then start the application:
+3. Ensure the launchers are executable, then start the application:
 
    ```bash
-   chmod +x launcher
+   chmod +x launcher MeteorM.desktop
    ./launcher
    ```
 
-After the executable bit is set, you can also double-click `launcher` in a file
-manager and choose **Run** if the desktop asks how to open executable text.
+For an icon-bearing graphical launcher, double-click `MeteorM.desktop` and
+choose **Allow Launching** if the desktop asks whether to trust it. The plain
+`launcher` remains the portable terminal/file-manager fallback.
 
 No virtual environment, package installation inside the repository, paid map
 API, or connected HackRF is required for the mock receiver.
@@ -52,10 +53,13 @@ Use the **Satellite** and **Receiver** selectors in that slot's header to switch
 between them. Switching unloads the previous panel, so the two panels are never
 loaded simultaneously.
 
-Choose **Settings → Appearance → Dark mode/Normal mode** to switch the GUI
-theme. The choice is applied immediately to standard controls and all custom
-map, spectrum, waterfall, constellation, and picture renderers, then saved in
-`settings.yaml`.
+Green mode is the standard theme. Choose **Settings → Appearance** to switch
+between Green, Dark, and Normal modes. The choice is applied immediately to
+standard controls and all custom map, spectrum, waterfall, constellation, and
+picture renderers, then saved in `settings.yaml`.
+
+The supplied application icon and Settings menu share the compact custom title
+strip with the window controls, avoiding a second menu row.
 
 The optional panels are:
 
@@ -116,6 +120,7 @@ and the provider enforces a minimum two-hour request interval.
 ```text
 MeteorM/
 ├── launcher          Double-click/run entry point
+├── MeteorM.desktop   Icon-bearing Linux desktop launcher
 ├── settings.yaml     All settings and cached runtime data
 ├── README.md         Setup and usage guide
 ├── info/             Dependencies, licenses, and technical notes

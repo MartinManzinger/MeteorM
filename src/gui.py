@@ -6,11 +6,12 @@ import importlib
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
-from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtGui import QAction, QActionGroup
+from PySide6.QtCore import QPoint, QObject, Qt, Signal
+from PySide6.QtGui import QAction, QActionGroup, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QStackedLayout,
@@ -28,6 +30,16 @@ from PySide6.QtWidgets import (
 
 
 logger = logging.getLogger("meteor_m.gui")
+
+APPLICATION_ICON_PATH = (
+    Path(__file__).resolve().parent.parent / "info" / "master_icon.png"
+)
+APPEARANCE_MODES = ("green", "dark", "normal")
+
+
+def normalize_appearance_mode(appearance_mode: str) -> str:
+    normalized = appearance_mode.lower()
+    return normalized if normalized in APPEARANCE_MODES else "green"
 
 FloatArray = NDArray[np.float64]
 ComplexArray = NDArray[np.complex64]
@@ -181,7 +193,7 @@ class ApplicationState:
     )
     running_satellite_ids: set[int] = field(default_factory=set)
     log_verbosity: str = "INFO"
-    appearance_mode: str = "dark"
+    appearance_mode: str = "green"
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,7 +313,7 @@ LEGACY_PANEL_KEYS = {
 }
 
 
-STYLESHEET = """
+DARK_STYLESHEET = """
 QWidget {
     background: #0b1119; color: #d8e2ec;
     font-family: "Inter", "Noto Sans", sans-serif; font-size: 12px;
@@ -315,6 +327,18 @@ QFrame#panelSlot[loaded="false"] {
 QFrame#panelSlotHeader {
     background: #111925; border: 1px solid #243246; border-radius: 7px;
 }
+QFrame#windowTitleBar {
+    background: #111925; border: 1px solid #243246; border-radius: 5px;
+}
+QLabel#windowTitle { color: #d8e2ec; font-size: 12px; font-weight: 600; }
+QToolButton#titleMenuButton, QToolButton#windowControlButton,
+QToolButton#windowCloseButton {
+    background: transparent; border: none; border-radius: 3px; padding: 4px 9px;
+}
+QToolButton#titleMenuButton:hover, QToolButton#windowControlButton:hover {
+    background: #22344b; color: #ffffff;
+}
+QToolButton#windowCloseButton:hover { background: #b83b45; color: #ffffff; }
 QLabel#panelSlotTitle {
     color: #a9bbcd; font-size: 11px; font-weight: 700; letter-spacing: 1px;
 }
@@ -354,6 +378,212 @@ QPlainTextEdit {
 QSplitter::handle { background: #172233; width: 5px; height: 5px; }
 """
 
+GREEN_STYLESHEET = DARK_STYLESHEET + """
+QFrame#windowTitleBar, QFrame#panelSlotHeader {
+    background: #102019; border-color: #28513c;
+}
+QFrame#panelSlot { background: #0d1712; border-color: #244735; }
+QFrame#panelSlot[loaded="false"] {
+    background: #0a130f; border-color: #315a43;
+}
+QLabel#panelSlotTitle, QLabel#windowTitle { color: #c9e2d1; }
+QLabel#dimLabel { color: #7fa18a; }
+QPushButton, QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit {
+    background: #16271d; border-color: #365e46;
+}
+QPushButton:hover { border-color: #71dc99; color: #f5fff8; }
+QPushButton:pressed { background: #203c2b; }
+QPushButton#primaryButton, QToolButton#panelChoiceButton:checked {
+    background: #27784a; border-color: #71dc99; color: #ffffff;
+}
+QPushButton#panelPlaceholder { color: #78a98a; }
+QPushButton#panelPlaceholder:hover {
+    background: #13251a; color: #71dc99;
+}
+QToolButton#titleMenuButton:hover, QToolButton#windowControlButton:hover {
+    background: #203c2b; color: #ffffff;
+}
+QPlainTextEdit {
+    background: #09120d; border-color: #294c37; color: #bed3c4;
+}
+QSplitter::handle { background: #193124; }
+"""
+
+
+class ResizeHandle(QWidget):
+    def __init__(self, edges, cursor: Qt.CursorShape) -> None:
+        super().__init__()
+        self.edges = edges
+        self.setCursor(cursor)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if event.button() == Qt.MouseButton.LeftButton:
+            handle = self.window().windowHandle()
+            if handle is not None:
+                handle.startSystemResize(self.edges)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
+class WindowChrome(QWidget):
+    """Frameless-window content surrounded by native system-resize handles."""
+
+    MARGIN = 5
+
+    def __init__(self, content: QWidget) -> None:
+        super().__init__()
+        layout = QGridLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        margin = self.MARGIN
+        handles = (
+            (
+                0,
+                0,
+                Qt.Edge.TopEdge | Qt.Edge.LeftEdge,
+                Qt.CursorShape.SizeFDiagCursor,
+            ),
+            (0, 1, Qt.Edge.TopEdge, Qt.CursorShape.SizeVerCursor),
+            (
+                0,
+                2,
+                Qt.Edge.TopEdge | Qt.Edge.RightEdge,
+                Qt.CursorShape.SizeBDiagCursor,
+            ),
+            (1, 0, Qt.Edge.LeftEdge, Qt.CursorShape.SizeHorCursor),
+            (1, 2, Qt.Edge.RightEdge, Qt.CursorShape.SizeHorCursor),
+            (
+                2,
+                0,
+                Qt.Edge.BottomEdge | Qt.Edge.LeftEdge,
+                Qt.CursorShape.SizeBDiagCursor,
+            ),
+            (2, 1, Qt.Edge.BottomEdge, Qt.CursorShape.SizeVerCursor),
+            (
+                2,
+                2,
+                Qt.Edge.BottomEdge | Qt.Edge.RightEdge,
+                Qt.CursorShape.SizeFDiagCursor,
+            ),
+        )
+        for row, column, edges, cursor in handles:
+            handle = ResizeHandle(edges, cursor)
+            if row in (0, 2):
+                handle.setFixedHeight(margin)
+            if column in (0, 2):
+                handle.setFixedWidth(margin)
+            layout.addWidget(handle, row, column)
+        layout.addWidget(content, 1, 1)
+        layout.setRowStretch(1, 1)
+        layout.setColumnStretch(1, 1)
+
+
+class WindowTitleBar(QFrame):
+    def __init__(self, window: QMainWindow, icon_path: Path) -> None:
+        super().__init__()
+        self._window = window
+        self._drag_offset: QPoint | None = None
+        self.setObjectName("windowTitleBar")
+        self.setFixedHeight(34)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(7, 2, 2, 2)
+        layout.setSpacing(3)
+        self.icon_label = QLabel()
+        self.icon_label.setObjectName("windowIcon")
+        self.icon_label.setFixedSize(24, 24)
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.icon_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        pixmap = QPixmap(str(icon_path))
+        if not pixmap.isNull():
+            self.icon_label.setPixmap(
+                pixmap.scaled(
+                    22,
+                    22,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+        layout.addWidget(self.icon_label)
+
+        self.settings_button = QToolButton()
+        self.settings_button.setObjectName("titleMenuButton")
+        self.settings_button.setText("Settings")
+        self.settings_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        layout.addWidget(self.settings_button)
+
+        self.title_label = QLabel(window.windowTitle())
+        self.title_label.setObjectName("windowTitle")
+        self.title_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        layout.addWidget(self.title_label)
+        layout.addStretch()
+
+        self.minimize_button = self._control_button("−", "Minimize")
+        self.maximize_button = self._control_button("□", "Maximize")
+        self.close_button = self._control_button("×", "Close", close=True)
+        self.minimize_button.clicked.connect(window.showMinimized)
+        self.maximize_button.clicked.connect(self._toggle_maximized)
+        self.close_button.clicked.connect(window.close)
+        layout.addWidget(self.minimize_button)
+        layout.addWidget(self.maximize_button)
+        layout.addWidget(self.close_button)
+
+    @staticmethod
+    def _control_button(
+        text: str, tooltip: str, *, close: bool = False
+    ) -> QToolButton:
+        button = QToolButton()
+        button.setObjectName("windowCloseButton" if close else "windowControlButton")
+        button.setText(text)
+        button.setToolTip(tooltip)
+        button.setFixedSize(38, 28)
+        return button
+
+    def _toggle_maximized(self) -> None:
+        if self._window.isMaximized():
+            self._window.showNormal()
+            self.maximize_button.setText("□")
+            self.maximize_button.setToolTip("Maximize")
+        else:
+            self._window.showMaximized()
+            self.maximize_button.setText("❐")
+            self.maximize_button.setToolTip("Restore")
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_offset = (
+                event.globalPosition().toPoint()
+                - self._window.frameGeometry().topLeft()
+            )
+            handle = self._window.windowHandle()
+            if handle is not None and handle.startSystemMove():
+                self._drag_offset = None
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if (
+            self._drag_offset is not None
+            and event.buttons() & Qt.MouseButton.LeftButton
+            and not self._window.isMaximized()
+        ):
+            self._window.move(event.globalPosition().toPoint() - self._drag_offset)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self._drag_offset = None
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._toggle_maximized()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
 
 class PanelSlot(QFrame):
@@ -522,9 +752,15 @@ class MainGUI(QMainWindow):
         self._panels: dict[str, QWidget] = {}
         self._appearance_actions: dict[str, QAction] = {}
         self.setWindowTitle("Meteor-M LRPT Station")
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+        application_icon = QIcon(str(APPLICATION_ICON_PATH))
+        self.setWindowIcon(application_icon)
+        application = QApplication.instance()
+        if application is not None:
+            application.setWindowIcon(application_icon)
         self.resize(*window_size)
         self.setMinimumSize(1050, 700)
-        self._build_menu()
+        self._build_title_bar()
         self._build_panel_grid()
         self.map_panel = self._panels["map"]
         self.log_panel = self._panels["log"]
@@ -687,14 +923,26 @@ class MainGUI(QMainWindow):
                 spec.row_span,
                 spec.column_span,
             )
-        self.setCentralWidget(central)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(4)
+        content_layout.addWidget(self.title_bar)
+        content_layout.addWidget(central, 1)
+        self.setCentralWidget(WindowChrome(content))
 
-    def _build_menu(self) -> None:
-        settings_menu = self.menuBar().addMenu("&Settings")
-        appearance_menu = settings_menu.addMenu("Appearance")
+    def _build_title_bar(self) -> None:
+        self.title_bar = WindowTitleBar(self, APPLICATION_ICON_PATH)
+        self.settings_menu = QMenu(self.title_bar)
+        self.settings_menu.setTitle("Settings")
+        appearance_menu = self.settings_menu.addMenu("Appearance")
         group = QActionGroup(self)
         group.setExclusive(True)
-        for mode, label in (("dark", "Dark mode"), ("normal", "Normal mode")):
+        for mode, label in (
+            ("green", "Green mode"),
+            ("dark", "Dark mode"),
+            ("normal", "Normal mode"),
+        ):
             action = QAction(label, self)
             action.setCheckable(True)
             action.setData(mode)
@@ -708,15 +956,22 @@ class MainGUI(QMainWindow):
             group.addAction(action)
             appearance_menu.addAction(action)
             self._appearance_actions[mode] = action
+        self.title_bar.settings_button.setMenu(self.settings_menu)
 
     def _show_appearance(self, mode: str) -> None:
-        normalized = mode if mode in self._appearance_actions else "dark"
+        normalized = normalize_appearance_mode(mode)
         self._appearance_actions[normalized].setChecked(True)
 
 
 def configure_application_style(
-    app: QApplication, appearance_mode: str = "dark"
+    app: QApplication, appearance_mode: str = "green"
 ) -> None:
     app.setStyle("Fusion")
     app.setPalette(app.style().standardPalette())
-    app.setStyleSheet(STYLESHEET if appearance_mode == "dark" else "")
+    normalized = normalize_appearance_mode(appearance_mode)
+    if normalized == "green":
+        app.setStyleSheet(GREEN_STYLESHEET)
+    elif normalized == "dark":
+        app.setStyleSheet(DARK_STYLESHEET)
+    else:
+        app.setStyleSheet("")

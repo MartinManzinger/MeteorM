@@ -3,9 +3,11 @@ import pytest
 
 pytest.importorskip("PySide6.QtWidgets", reason="PySide6 Qt runtime is not installed")
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QWidget
 
 from gui import (
+    APPLICATION_ICON_PATH,
     AppEventBus,
     ApplicationState,
     MainGUI,
@@ -36,6 +38,23 @@ def test_gui_starts_with_the_mandatory_map_and_log_panels() -> None:
     assert map_slot.panel is window.map_panel
     assert window.map_panel is not None
     assert window.findChild(QWidget, "panelLoader") is None
+
+    window.close()
+    app.processEvents()
+
+
+def test_icon_and_settings_share_the_custom_window_title_strip() -> None:
+    app = QApplication.instance() or QApplication([])
+    window = make_window()
+
+    assert APPLICATION_ICON_PATH.is_file()
+    assert window.windowFlags() & Qt.WindowType.FramelessWindowHint
+    assert not window.windowIcon().isNull()
+    assert window.title_bar.icon_label.pixmap() is not None
+    assert not window.title_bar.icon_label.pixmap().isNull()
+    assert window.title_bar.settings_button.menu() is window.settings_menu
+    assert window.menuWidget() is None
+    assert set(window._appearance_actions) == {"green", "dark", "normal"}
 
     window.close()
     app.processEvents()

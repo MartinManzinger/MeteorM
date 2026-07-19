@@ -26,6 +26,7 @@ from PySide6.QtWidgets import QApplication
 from skyfield.api import EarthSatellite, load, wgs84
 
 from gui import (
+    APPEARANCE_MODES,
     AppEventBus,
     ApplicationState,
     MainGUI,
@@ -41,6 +42,7 @@ from gui import (
     SpectrumFrame,
     TLERecord,
     configure_application_style,
+    normalize_appearance_mode,
 )
 from panel_log import ApplicationLogController
 
@@ -77,7 +79,7 @@ DEFAULT_DATA: dict[str, Any] = {
     },
     "interface": {
         "log_verbosity": "INFO",
-        "appearance_mode": "dark",
+        "appearance_mode": "green",
         "window_width": 1480,
         "window_height": 920,
         "loaded_panels": [],
@@ -151,7 +153,7 @@ class SettingsStore:
     def appearance_mode(self) -> str:
         with self._lock:
             value = str(self._data["interface"]["appearance_mode"]).lower()
-            return value if value in {"dark", "normal"} else "dark"
+            return normalize_appearance_mode(value)
 
     def window_size(self) -> tuple[int, int]:
         with self._lock:
@@ -198,7 +200,7 @@ class SettingsStore:
 
     def update_appearance_mode(self, appearance_mode: str) -> None:
         normalized = appearance_mode.lower()
-        if normalized not in {"dark", "normal"}:
+        if normalized not in APPEARANCE_MODES:
             raise ValueError(f"unsupported appearance mode: {appearance_mode}")
         with self._lock:
             self._data["interface"]["appearance_mode"] = normalized
@@ -960,7 +962,7 @@ class AppOrchestrator(QObject):
     @Slot(str)
     def apply_appearance(self, appearance_mode: str) -> None:
         normalized = appearance_mode.lower()
-        if normalized not in {"dark", "normal"}:
+        if normalized not in APPEARANCE_MODES:
             logger.error("Unsupported appearance mode requested: %s", appearance_mode)
             return
         try:

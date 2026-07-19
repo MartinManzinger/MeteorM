@@ -6,7 +6,7 @@ from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtWidgets import QWidget
 
-from gui import ImageArray, PanelContext
+from gui import ImageArray, PanelContext, normalize_appearance_mode
 
 
 class LRPTImageWidget(QWidget):
@@ -14,11 +14,11 @@ class LRPTImageWidget(QWidget):
         super().__init__(parent)
         self._image: ImageArray | None = None
         self._visible_lines = 0
-        self._appearance_mode = "dark"
+        self._appearance_mode = "green"
         self.setMinimumSize(400, 225)
 
     def set_appearance(self, appearance_mode: str) -> None:
-        self._appearance_mode = "normal" if appearance_mode == "normal" else "dark"
+        self._appearance_mode = normalize_appearance_mode(appearance_mode)
         self.update()
 
     def set_image(self, image: ImageArray | None, visible_lines: int) -> None:
@@ -31,11 +31,25 @@ class LRPTImageWidget(QWidget):
         del event
         painter = QPainter(self)
         normal = self._appearance_mode == "normal"
+        green = self._appearance_mode == "green"
+        background = (
+            QColor("#ffffff")
+            if normal
+            else QColor("#0b1610")
+            if green
+            else QColor("#0d141d")
+        )
         painter.fillRect(
-            self.rect(), QColor("#ffffff") if normal else QColor("#0d141d")
+            self.rect(), background
         )
         if self._image is None:
-            painter.setPen(QColor("#405466") if normal else QColor("#91a3b8"))
+            painter.setPen(
+                QColor("#405466")
+                if normal
+                else QColor("#a8c6b2")
+                if green
+                else QColor("#91a3b8")
+            )
             painter.drawText(
                 self.rect(), Qt.AlignmentFlag.AlignCenter, "Waiting for image data"
             )
@@ -60,7 +74,13 @@ class LRPTImageWidget(QWidget):
             target.setTop(target.center().y() - draw_height / 2)
             target.setHeight(draw_height)
         painter.drawImage(target, image)
-        painter.setPen(QColor("#405466") if normal else QColor("#a8bacb"))
+        painter.setPen(
+            QColor("#405466")
+            if normal
+            else QColor("#b9d1c0")
+            if green
+            else QColor("#a8bacb")
+        )
         painter.drawText(
             QRectF(8, self.height() - 23, self.width() - 16, 18),
             Qt.AlignmentFlag.AlignCenter,
