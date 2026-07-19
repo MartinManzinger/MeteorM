@@ -1,8 +1,45 @@
+# Python bytecode and interpreter caches
 __pycache__/
 *.py[cod]
+*$py.class
+
+# Tests, coverage, and static-analysis caches
 .pytest_cache/
 .coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+
+# Packaging and build output
 build/
 dist/
 *.egg-info/
+*.egg
+
+# Virtual environments are unsupported, but ignore accidental local ones
 .venv/
+venv/
+env/
+
+# Application runtime leftovers and exported session logs
+.settings.yaml.tmp
+*.log
+core
+core.*
+
+# Editor and operating-system metadata
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Local coding-agent state is not part of the project
+.agents/
+.codex/
