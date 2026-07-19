@@ -1,0 +1,30 @@
+Meteor-M LRPT Station dependencies
+===================================
+
+Runtime
+-------
+Python 3.11 or newer
+PySide6 6.6 or newer       Desktop GUI and Qt rendering
+NumPy 1.26 or newer        IQ, FFT, plotting, and image arrays
+PyYAML 6.0 or newer        settings.yaml loading and saving
+Skyfield 1.49 or newer     SGP4 satellite propagation and WGS84 positions
+sgp4 2.13 or newer         Low-level SGP4 implementation used by Skyfield
+jplephem 2.13 or newer     Skyfield dependency
+
+Development / testing
+---------------------
+pytest 8.0 or newer
+
+Ubuntu system packages
+----------------------
+python3
+python3-numpy
+python3-yaml
+python3-pyside6.qtwidgets
+python3-skyfield
+python3-pytest
+
+Install command
+---------------
+sudo apt install python3 python3-numpy python3-yaml \
+  python3-pyside6.qtwidgets python3-skyfield python3-pytest

@@ -1,0 +1,7 @@
+Natural Earth 1:110m land polygons
+
+Source:
+https://github.com/nvkelso/natural-earth-vector/blob/master/geojson/ne_110m_land.geojson
+
+Natural Earth vector and raster map data is in the public domain.
+https://www.naturalearthdata.com/about/terms-of-use/

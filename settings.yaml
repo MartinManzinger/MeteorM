@@ -1,0 +1,44 @@
+schema_version: 1
+receiver:
+  location:
+    latitude_deg: 48.1077212
+    longitude_deg: 11.6015241
+  device: Simulated HackRF One
+  center_frequency_hz: 137900000.0
+  sample_rate_hz: 2000000.0
+  filter_bandwidth_hz: 1750000.0
+  lna_gain_db: 24
+  vga_gain_db: 28
+  amplifier_enabled: false
+satellite:
+  enabled_norad_catalog_ids:
+  - 57166
+  position_update_seconds: 1.0
+  ground_track_refresh_seconds: 60.0
+  tle_refresh_hours: 6.0
+  tle_minimum_request_hours: 2.0
+interface:
+  log_verbosity: INFO
+  appearance_mode: dark
+  window_width: 1920
+  window_height: 967
+  loaded_panels:
+  - satellite_tracking
+  - sdr
+  - spectrum
+  - constellation
+  - picture
+cache:
+  tle:
+    '59051':
+      name: METEOR-M2 4
+      retrieved_at: '2026-07-19T12:55:05.608473+00:00'
+      source_url: https://celestrak.org/NORAD/elements/gp.php?CATNR=59051&FORMAT=TLE
+      line1: 1 59051U 24039A   26200.25935704 -.00000017  00000+0  12162-4 0  9997
+      line2: 2 59051  98.7028 159.1575 0008247  78.7163 281.4941 14.22432337123828
+    '57166':
+      name: METEOR-M2 3
+      retrieved_at: '2026-07-19T14:43:37.128379+00:00'
+      source_url: https://celestrak.org/NORAD/elements/gp.php?CATNR=57166&FORMAT=TLE
+      line1: 1 57166U 23091A   26200.27857001 -.00000025  00000+0  77246-5 0  9998
+      line2: 2 57166  98.6065 254.5972 0005110  81.2287 278.9471 14.24049141159081

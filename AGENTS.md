@@ -1,93 +1,298 @@
 # AGENTS.md
 
+## Purpose of this file
+
+This is the working brief for contributors and coding agents. It records the
+current product state, the required repository structure, architectural rules,
+and the next unfinished milestones. Read it before changing the project.
+
 ## Project goal
 
-Build a desktop Python application for receiving and displaying live Meteor-M N2-3/N2-4 LRPT weather-satellite data using a HackRF One.
+Build a receive-only desktop Python application for receiving, tracking,
+decoding, and displaying live Meteor-M N2-3 and N2-4 LRPT weather-satellite
+data with a HackRF One.
 
-The application must combine SDR control, satellite tracking, signal visualization, demodulation, decoding, and live image display in one GUI.
+The final application should combine these functions in one GUI:
 
-## Main requirements
+- receiver-location configuration;
+- satellite tracking and pass planning;
+- HackRF control through a GNU Radio receive pipeline;
+- live spectrum and waterfall visualization;
+- live IQ constellation visualization;
+- receiver and demodulator status;
+- LRPT demodulation and packet decoding;
+- incremental reconstruction and display of weather imagery.
 
-The GUI must provide:
+The program must never enable transmission. It is a receive-only station.
 
-- Receiver-location selection by map or manual latitude/longitude.
-- Persistent settings stored in a human-readable YAML file.
-- World map showing:
-  - receiver location;
-  - predicted satellite ground track;
-  - current satellite position;
-  - visible-pass information where practical.
-- HackRF control panel:
-  - center frequency;
-  - sample rate;
-  - filter bandwidth;
-  - LNA/VGA gains;
-  - amplifier state;
-  - device selection.
-- Live spectrum display.
-- Live IQ constellation display.
-- Receiver and demodulator status.
-- Live reconstruction of decoded LRPT image data.
+## Current implementation status
 
-Prefer OpenStreetMap/Leaflet or another freely usable map backend. Do not require a paid Google Maps API unless explicitly approved.
+The project currently provides a functional hardware-free desktop mockup and
+the complete configuration/tracking/map foundation. It starts without a
+connected HackRF.
 
-Satellite positions should be calculated from TLE orbital data through a replaceable provider interface. Keep downloading TLE data separate from orbit propagation and GUI rendering.
+### Application shell and persistence
 
-## Architecture
+- Python and PySide6 provide the desktop application.
+- The root `launcher` starts `src/main.py` and is intended to be double-clicked.
+- The program does not use or create a virtual environment.
+- All persistent settings and cached runtime data live in the single
+  repository-root `settings.yaml` file.
+- YAML writes are lock-protected and use atomic file replacement.
+- Persisted data includes receiver settings, receiver coordinates, enabled
+  satellites, tracking intervals, window size, loaded panels, log verbosity,
+  appearance mode, and validated TLE cache entries.
+- Dark and normal modes are available from **Settings -> Appearance**. Theme
+  changes apply immediately to standard widgets and every custom renderer and
+  are persisted in YAML.
 
-Use separate classes with clear responsibilities. Suggested components:
+### Modular GUI
 
-- `AppConfig` — YAML loading, validation and saving.
-- `ReceiverLocation` — receiver coordinates and location selection.
-- `TLEProvider` — retrieves and caches orbital elements.
-- `SatelliteTracker` — orbit propagation, position and ground track.
-- `HackRFController` — SDR configuration and lifecycle.
-- `GNUradioBridge` — starts and interfaces with the GNU Radio receiver.
-- `SpectrumProcessor` — FFT preparation and spectrum data.
-- `ConstellationProcessor` — IQ point-cloud preparation.
-- `LRPTDemodulator` — signal demodulation and decoder state.
-- `LRPTDecoder` — packet and image decoding.
-- `ImageAssembler` — incremental image reconstruction.
-- `MainWindow` — GUI composition only.
+- The GUI uses a fixed six-column/eight-row panel grid.
+- The World map and Application log panels are mandatory and cannot be closed.
+- Optional panels are imported lazily. Their inactive space remains clickable
+  in the assigned grid position; there is no separate panel-loader area.
+- Closing an optional panel unloads its widget and restores its clickable
+  placeholder. Import or dependency failures remain retryable and are written
+  to the mandatory log.
+- Satellite tracking and Receiver location share the upper-left grid slot.
+  Header selectors switch between them. Loading one unloads the other, so only
+  one can consume the space or request services at a time.
+- Loaded optional panels are restored from `settings.yaml` on the next launch.
+- Panels communicate only through `AppEventBus` signals and immutable/latest
+  state in `PanelContext`. Panels must not directly call one another.
 
-Do not put signal processing, hardware control or orbital calculations directly into GUI widgets.
+The current panel files and responsibilities are:
 
-## GNU Radio integration
+- `panel_map.py` — mandatory offline world map and orbit overlays;
+- `panel_log.py` — mandatory application log, verbosity selection, and text
+  export;
+- `panel_location.py` — manual coordinates, pasted coordinates/Google Maps URL
+  parsing, and synchronization with map-selected coordinates;
+- `panel_satellite_tracking.py` — two independent Meteor satellite controls,
+  TLE status, manual fetch, information, and SDR tune actions;
+- `panel_sdr.py` — HackRF-style receiver settings and simulated receiver
+  lifecycle controls;
+- `panel_spectrum.py` — custom spectrum and bounded waterfall renderers;
+- `panel_constellation.py` — custom decoded-IQ point-cloud renderer;
+- `panel_picture.py` — custom incremental image renderer, currently fed by
+  simulated image data.
 
-GNU Radio should handle HackRF sample acquisition and the required real-time receiver pipeline.
+### Receiver location
 
-The generated GNU Radio Python file is treated as a backend component. Do not manually mix GUI code into generated GNU Radio code.
+- Latitude/longitude can be entered manually.
+- Plain coordinates and common Google Maps coordinate URLs can be pasted.
+- Right-clicking elsewhere on the map offers **Set receiver position here**.
+- Location changes are routed through the event bus and persisted immediately.
 
-Expose data to the application through a defined bridge, such as callbacks, queues, ZeroMQ or another documented local interface.
+### Satellite tracking
 
-The custom application must implement its own spectrum, constellation, map and image displays. Do not depend on GNU Radio GUI sinks for the final interface.
+- Both METEOR-M N2-3 (NORAD 57166) and N2-4 (NORAD 59051) are supported.
+- Each satellite has an independent activation checkbox, cached TLE record,
+  worker, map color, information action, manual fetch action, and SDR tune
+  action.
+- `TLEProvider` separates orbital-data retrieval/cache policy from propagation.
+- `CelestrakTLEProvider` is the current replaceable provider.
+- Startup reads only validated cached TLE data and performs no automatic
+  network request.
+- Online retrieval occurs only after the user presses that satellite's fetch
+  button. The provider enforces CelesTrak's two-hour minimum request interval,
+  validates catalog IDs, line lengths, prefixes, and checksums, and falls back
+  to a valid cache when possible.
+- `SatelliteTracker` performs local Skyfield/SGP4 propagation and WGS84
+  geodetic conversion with no file or network I/O.
+- Each enabled satellite runs in its own worker thread and publishes through a
+  bounded latest-value queue. Tracking starts only while the Satellite panel is
+  loaded and stops when that panel is unloaded or switched to Receiver.
 
-## Implementation rules
+### World map
 
-- Use Python and PySide6 unless a different technology is explicitly approved.
-- Use NumPy for sample and plotting data.
-- Keep high-rate processing outside the GUI thread.
-- Use bounded queues to prevent uncontrolled memory growth.
-- Avoid unnecessary copies of IQ data.
-- Keep hardware, decoder and map providers replaceable and mockable.
-- Support development and GUI testing without connected hardware.
-- Never enable transmission; this application is receive-only.
-- Do not silently install packages or modify system configuration.
-- Do not commit changes unless explicitly requested.
-- Prefer small, understandable modules over excessive abstraction.
-- Document external protocols, data formats and important assumptions.
+- The map is a custom Qt renderer using bundled Natural Earth land geometry;
+  it does not require network access or a paid map API.
+- It displays the receiver, distinct satellite colors, current-position
+  circles, projected tracks, and a lower-left satellite legend.
+- Ground tracks contain 901 propagated points at 12-second spacing.
+- The displayed window covers 60 minutes of history and 120 minutes of future
+  trajectory.
+- Historical track opacity falls off steeply toward the oldest point, making
+  the direction of travel visible while emphasizing the future path.
+- Small crosses and local-time labels mark interpolated satellite positions at
+  every wall-clock `XX:00` and `XX:30` in the past and future portions.
+- Right-clicking a current satellite circle offers an action to tune the SDR to
+  that satellite's configured LRPT center frequency. Right-clicking elsewhere
+  retains receiver-position selection.
 
-## Development approach
+### Simulation and visualization
 
-Work incrementally:
+- `SimulationBackend` provides a mock QPSK-like IQ stream and incremental image
+  so the interface can be developed without hardware.
+- Receiver snapshots travel through a bounded queue.
+- `SpectrumProcessor` prepares NumPy FFT data outside GUI widgets.
+- `ConstellationProcessor` creates a bounded, normalized IQ point cloud.
+- Spectrum, waterfall, constellation, and image displays are custom application
+  renderers; the final application must not depend on GNU Radio GUI sinks.
+- Real HackRF acquisition, LRPT demodulation, decoding, and image reconstruction
+  are not implemented yet. Current signal and image data are simulated.
 
-1. GUI layout with simulated data.
+### Logging and tests
+
+- The mandatory log receives application errors, warnings, informational
+  messages, and debug output.
+- The user can select ERROR, WARNING, INFO, or DEBUG verbosity.
+- The visible filtered session log can be saved as `.log` or `.txt`.
+- Hardware-free tests live in `src/test` and run with:
+
+  ```bash
+  python3 -m pytest -q src/test
+  ```
+
+- At the time of this rewrite, the full suite contains 37 passing tests.
+- GUI tests use Qt's offscreen platform through `src/test/conftest.py`.
+
+## Required directory and code structure
+
+Keep the repository deliberately flat and understandable:
+
+```text
+MeteorM/
+├── AGENTS.md          Current contributor/agent brief
+├── README.md          Fresh-system setup and user quick start
+├── launcher           Double-clickable application launcher
+├── settings.yaml      The only application settings/cache file
+├── .gitignore
+├── info/              Dependencies, licenses, and technical documentation
+│   ├── architecture.md
+│   ├── dependencies.txt
+│   ├── licenses.md
+│   ├── natural-earth-license.txt
+│   └── satellite-tracking.md
+└── src/
+    ├── main.py
+    ├── gui.py
+    ├── panel_map.py
+    ├── panel_log.py
+    ├── panel_location.py
+    ├── panel_satellite_tracking.py
+    ├── panel_sdr.py
+    ├── panel_spectrum.py
+    ├── panel_constellation.py
+    ├── panel_picture.py
+    ├── ne_110m_land.geojson
+    └── test/
+        └── test_*.py
+```
+
+Structural requirements:
+
+- Production Python code belongs directly in `src`; do not introduce
+  production package subdirectories.
+- `src` should contain only `main.py`, `gui.py`, and exactly one Python file for
+  each visible panel.
+- Tests are the only Python code allowed in the `src/test` subdirectory.
+- Panel-specific helper classes belong inside that panel's file rather than in
+  additional helper modules.
+- `main.py` is the composition root and contains non-visual services,
+  processing classes, settings ownership, worker lifecycle, and orchestration.
+- `gui.py` contains shared data contracts, application state, the event bus,
+  panel registry/slots, theme shell, and `MainGUI` composition.
+- Each `panel_*.py` exports a `Panel(QWidget)`-compatible class constructed with
+  `PanelContext`.
+- Keep all user settings and cached data in root `settings.yaml`; do not create
+  hidden application settings/cache directory trees.
+- Dependency lists, licenses, provider assumptions, and external protocol notes
+  belong in `info`.
+
+## Architecture and implementation rules
+
+- Use Python, PySide6, NumPy, PyYAML, and Skyfield unless a different technology
+  is explicitly approved.
+- Prefer small classes with clear responsibilities over excessive abstraction.
+- Keep hardware control, file/network I/O, orbit propagation, demodulation, and
+  high-rate processing out of GUI widgets and out of the GUI thread.
+- Use bounded queues and latest-value delivery for streaming data to prevent
+  uncontrolled memory growth.
+- Avoid unnecessary IQ-array copies.
+- Keep hardware, TLE, map, decoder, and data-source boundaries replaceable and
+  mockable.
+- A panel may issue requests and consume snapshots through `AppEventBus`; it
+  must not own application services or reference another panel directly.
+- Keep TLE downloading, cache validation, orbit propagation, and map rendering
+  separate.
+- Preserve development and GUI testing without connected hardware.
+- Do not add any transmit path or expose HackRF transmission controls.
+- Prefer freely usable offline/open map data. Do not introduce a paid Google
+  Maps dependency without explicit approval.
+- Do not silently install packages or modify system configuration. This project
+  does not use a virtual environment; when installation is explicitly required,
+  use normal system/user package installation as appropriate and report it.
+- Do not commit changes unless the user explicitly requests a commit.
+- Preserve unrelated user changes in a dirty working tree.
+- Document external protocols, data formats, licensing, and uncertain technical
+  assumptions. Do not guess unresolved LRPT details.
+- Before a major subsystem is implemented, describe its interface and external
+  dependencies.
+
+## GNU Radio and HackRF integration constraints
+
+GNU Radio is the intended owner of HackRF sample acquisition and the real-time
+receiver pipeline.
+
+- Treat a generated GNU Radio Python flowgraph as a backend component.
+- Never mix application GUI code into generated GNU Radio code.
+- Expose data and control through a documented bridge such as callbacks,
+  bounded queues, or ZeroMQ.
+- Keep the bridge replaceable so simulation remains available.
+- Continue using the application's custom spectrum, waterfall, constellation,
+  map, and image renderers instead of GNU Radio GUI sinks.
+- The bridge and flowgraph must remain receive-only.
+
+## Open TODOs
+
+The next work begins at real receiver integration. The main unfinished items are:
+
+1. Define and implement a replaceable `HackRFController` and actual HackRF
+   device discovery, selection, configuration, start/stop, and error recovery.
+2. Build the receive-only GNU Radio flowgraph and a documented `GNUradioBridge`
+   without mixing it into GUI code.
+3. Feed bounded live IQ/sample data from that bridge into the existing custom
+   spectrum and constellation pipeline while preserving simulation mode.
+4. Research and document the exact Meteor-M N2-3/N2-4 LRPT modulation,
+   symbol-rate, synchronization, interleaving, error-correction, packet, and
+   image formats before implementing them.
+5. Implement `LRPTDemodulator` outside the GUI thread, including carrier/symbol
+   synchronization and useful receiver/demodulator status snapshots.
+6. Implement `LRPTDecoder` for frame synchronization, error correction, packet
+   parsing, and channel data. Do not invent uncertain protocol values.
+7. Implement `ImageAssembler` for incremental real LRPT image reconstruction
+   and replace the simulated picture source.
+8. Add receiver-relative visible-pass prediction: azimuth, elevation, rise,
+   culmination, set time, maximum elevation, and practical visibility cues.
+9. Verify current satellite transmission status/frequency handling and consider
+   a documented way to update frequency information without aggressive online
+   polling.
+10. Add hardware-in-the-loop tests, disconnect/reconnect handling, malformed
+    stream handling, and end-to-end recorded-IQ fixtures.
+11. Evaluate an optional OpenStreetMap/Leaflet backend only if it materially
+    improves the map while preserving a free/offline-capable fallback.
+12. Improve packaging and fresh-system compatibility after the real native GNU
+    Radio/HackRF dependency set is known.
+
+## Development sequence
+
+Completed foundation:
+
+1. GUI layout and simulated data.
 2. Configuration and receiver-location handling.
-3. Satellite tracking and map display.
-4. HackRF/GNU Radio connection.
-5. Spectrum and constellation data.
-6. LRPT demodulation and decoding.
-7. Live image reconstruction.
-8. Integration tests and error handling.
+3. TLE caching, local propagation, satellite controls, and map display.
+4. Custom spectrum, waterfall, constellation, picture, logging, themes, and
+   modular panel lifecycle.
 
-Before implementing a major subsystem, describe its interface and dependencies. Report missing specifications or uncertain protocol details instead of guessing.
+Continue incrementally with:
+
+5. HackRF/GNU Radio connection and simulation/real-backend selection.
+6. Live sample transport and receiver status.
+7. LRPT demodulation and decoding.
+8. Live real-image reconstruction.
+9. Pass prediction, integration testing, and robust error handling.
+
+Keep each step runnable and testable without hardware whenever practical.
