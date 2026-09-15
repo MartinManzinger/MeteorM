@@ -21,17 +21,29 @@ built-in timescale is used, so propagation does not trigger a second download.
 
 The internal catalog currently defines:
 
-| Application name | CelesTrak name | NORAD ID | Default LRPT tune | Map color |
-| --- | --- | ---: | ---: | --- |
+| Application name | CelesTrak name | NORAD ID | Receiver action | Map color |
+| --- | --- | ---: | --- | --- |
 | METEOR-M N2-3 | METEOR-M2 3 | 57166 | 137.9000 MHz | cyan |
 | METEOR-M N2-4 | METEOR-M2 4 | 59051 | 137.9000 MHz | magenta |
+| NOAA-15 | NOAA 15 | 25338 | APT 137.6200 MHz | yellow |
+| NOAA-18 | NOAA 18 | 28654 | APT 137.9125 MHz | violet |
+| NOAA-19 | NOAA 19 | 33591 | APT 137.1000 MHz | orange |
 
-Both spacecraft have independent activation checkboxes, workers, cache records,
-manual fetch actions, information windows, and SDR tune actions. The mandatory
-map labels each marker and uses matching colored tracks and a legend. WMO OSCAR
-lists 137.1, 137.9, and 137.9125 MHz as assigned LRPT frequencies for these
+All five spacecraft have independent activation checkboxes, workers, cache
+records, manual fetch actions, and information windows. The mandatory map labels
+each marker and uses matching colored tracks and a legend. WMO OSCAR lists
+137.1, 137.9, and 137.9125 MHz as assigned LRPT frequencies for the Meteor
 spacecraft, so the displayed 137.9000 MHz tune is a reception default rather
 than a guarantee that a spacecraft has not switched frequency.
+
+NOAA-15, NOAA-18, and NOAA-19 are legacy polar weather spacecraft retained here
+for orbit visualization and manual tuning to their historical APT center
+frequencies. Tuning only changes the SDR center frequency; this application does
+not claim NOAA APT/HRPT demodulation or decoding. NOAA decommissioned the POES
+spacecraft in 2025, so a configured tune does not imply that a transmitter is
+currently active. CelesTrak still publishes current general-perturbations
+elements for their NORAD catalog objects, allowing the same local SGP4
+trajectory path to be reused.
 
 ## TLE source and cache policy
 
@@ -78,8 +90,8 @@ local-time labels mark interpolated positions at every wall-clock `XX:00` and
 `XX:30`; the historical line uses a steep opacity falloff toward the oldest
 point to make travel direction visible while reserving more of the track for
 future planning. Right-clicking a current-position circle opens a map context
-action that applies that satellite's configured LRPT frequency to the SDR
-settings. Skyfield notes that satellite elements are generally useful
+action that applies that satellite's configured LRPT or legacy APT frequency to
+the SDR settings. Skyfield notes that satellite elements are generally useful
 only near their epoch, so the GUI exposes whether the last valid cache was used
 instead of presenting stale data as newly downloaded data.
 
@@ -99,3 +111,8 @@ rise, culmination, and set times, is intentionally a separate next step.
 - [Skyfield Earth satellite documentation](https://rhodesmill.org/skyfield/earth-satellites.html)
 - [WMO OSCAR Meteor-M N2-3](https://space.oscar.wmo.int/satellites/view/meteor_m_n2_3)
 - [WMO OSCAR Meteor-M N2-4](https://space.oscar.wmo.int/satellites/view/meteor_m_n2_4)
+- [WMO OSCAR NOAA-15](https://space.oscar.wmo.int/satellites/view/noaa_15)
+- [WMO OSCAR NOAA-18](https://space.oscar.wmo.int/satellites/view/noaa_18)
+- [WMO OSCAR NOAA-19](https://space.oscar.wmo.int/satellites/view/noaa_19)
+- [NOAA POES status](https://www.ospo.noaa.gov/operations/poes/status.html)
+- [NOAA POES decommissioning notice](https://www.nesdis.noaa.gov/news/legacy-orbit-noaa-decommissions-the-poes-satellite-constellation)

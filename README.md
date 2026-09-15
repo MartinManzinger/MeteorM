@@ -72,17 +72,21 @@ picture renderers, then saved in `settings.yaml`.
 
 The supplied application icon and Settings menu share the compact custom title
 strip with the window controls. The program name stays centered across the full
-window, avoiding a second menu row.
+window, avoiding a second menu row. The Qt desktop identity matches
+`MeteorM.desktop`, allowing Linux taskbars to resolve the supplied icon. Menu
+popup colors follow the selected appearance theme.
 
 The optional panels are:
 
 - **Receiver location** — manual coordinates, pasted coordinates/Google Maps
   links, and synchronization with the map's right-click receiver action;
-- **Satellite tracking** — independent M2-3/M2-4 activation, cached TLE loading,
-  local actual/projected orbit calculations, 12-second ground-track resolution,
-  fading historical direction cues, half-hour local-time map markers, colored
-  overlays, per-satellite information and SDR tuning from either the panel or a
-  satellite's map context menu, and manual online refresh;
+- **Satellite tracking** — independent M2-3/M2-4 and NOAA-15/18/19 activation,
+  cached TLE loading, local actual/projected orbit calculations, 12-second
+  ground-track resolution, fading historical direction cues, half-hour
+  local-time map markers, colored overlays, per-satellite information, manual
+  online refresh, Meteor LRPT tuning, and NOAA legacy APT tuning. NOAA entries
+  do not claim APT demodulation or decoding support. Satellite details use a
+  one-at-a-time accordion to keep all five controls manageable;
 - **SDR control** — simulation/HackRF selection, asynchronous HackRF discovery,
   synchronized numeric fields/sliders, immediate RF-setting updates,
   receive-only lifecycle, sample counters, and backend errors;

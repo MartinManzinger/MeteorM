@@ -15,6 +15,7 @@ from gui import (
     ApplicationState,
     METEOR_M_N2_3,
     METEOR_M_N2_4,
+    NOAA_18,
     OrbitSnapshot,
     PanelContext,
     ReceiverLocation,
@@ -111,7 +112,41 @@ def test_right_clicking_satellite_requests_its_sdr_frequency(monkeypatch) -> Non
     )
     widget.contextMenuEvent(ContextEvent())
 
-    assert requested[-1].center_frequency_hz == METEOR_M_N2_4.lrpt_frequency_hz
+    assert (
+        requested[-1].center_frequency_hz
+        == METEOR_M_N2_4.receiver_frequency_hz
+    )
+    widget.close()
+    app.processEvents()
+
+
+def test_noaa_map_marker_requests_its_apt_frequency() -> None:
+    app = QApplication.instance() or QApplication([])
+    bus = AppEventBus()
+    widget = Panel(
+        PanelContext(
+            bus,
+            ApplicationState(ReceiverSettings(), ReceiverLocation()),
+        )
+    )
+    observed = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
+    position = SatellitePosition(observed, 0.0, 0.0, 850.0)
+    widget.set_snapshot(
+        OrbitSnapshot(
+            satellite=NOAA_18,
+            position=position,
+            ground_track=(position,),
+            tle_epoch=observed,
+            tle_retrieved_at=observed,
+            using_cached_tle=True,
+        )
+    )
+    requested = []
+    bus.receiver_settings_requested.connect(requested.append)
+
+    widget.satellite_tune_requested.emit(NOAA_18.norad_catalog_id)
+
+    assert requested[-1].center_frequency_hz == NOAA_18.receiver_frequency_hz
     widget.close()
     app.processEvents()
 

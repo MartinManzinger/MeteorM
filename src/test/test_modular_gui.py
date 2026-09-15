@@ -8,9 +8,11 @@ from gui import (
     MainGUI,
     METEOR_M_N2_3,
     METEOR_M_N2_4,
+    NOAA_15,
     PANEL_SPECS,
     PanelContext,
     PanelSpec,
+    TRACKED_SATELLITES,
 )
 from main import AppOrchestrator, SettingsStore
 from panel_log import ApplicationLogController
@@ -181,6 +183,7 @@ def test_appearance_menu_applies_and_persists_theme(tmp_path) -> None:
     assert settings.appearance_mode() == "green"
     assert context.state.appearance_mode == "green"
     assert "#71dc99" in app.styleSheet()
+    assert "QMenu { background: #102019" in app.styleSheet()
     assert window.map_panel._appearance_mode == "green"
     assert spectrum.spectrum._appearance_mode == "green"
     assert spectrum.waterfall._appearance_mode == "green"
@@ -192,13 +195,16 @@ def test_appearance_menu_applies_and_persists_theme(tmp_path) -> None:
     app.processEvents()
 
 
-def test_satellite_panel_controls_both_satellites_and_tunes_receiver(tmp_path) -> None:
+def test_satellite_panel_controls_meteor_and_noaa_trajectory_entries(tmp_path) -> None:
     app = QApplication.instance() or QApplication([])
     settings = SettingsStore(tmp_path / "settings.yaml")
     bus, context = make_context(settings)
     window = MainGUI(context)
     receiver = FakeReceiver()
-    tracking = {57166: FakeTracking(), 59051: FakeTracking()}
+    tracking = {
+        satellite.norad_catalog_id: FakeTracking()
+        for satellite in TRACKED_SATELLITES
+    }
     orchestrator = AppOrchestrator(
         window, bus, context.state, settings, receiver, tracking
     )
@@ -212,24 +218,49 @@ def test_satellite_panel_controls_both_satellites_and_tunes_receiver(tmp_path) -
     assert window.load_panel("satellite_tracking")
     panel = window.panel_instance("satellite_tracking")
     assert set(panel.cards) == {
-        METEOR_M_N2_3.norad_catalog_id,
-        METEOR_M_N2_4.norad_catalog_id,
+        satellite.norad_catalog_id for satellite in TRACKED_SATELLITES
     }
 
     first_card = panel.cards[METEOR_M_N2_3.norad_catalog_id]
+    assert first_card.expanded
+    assert sum(card.expanded for card in panel.cards.values()) == 1
+    second_card = panel.cards[METEOR_M_N2_4.norad_catalog_id]
+    second_card.header.click()
+    assert second_card.expanded
+    assert not first_card.expanded
+    assert sum(card.expanded for card in panel.cards.values()) == 1
+
     first_card.enabled.click()
     assert enabled_requests[-1] == (METEOR_M_N2_3.norad_catalog_id, False)
     assert not tracking[METEOR_M_N2_3.norad_catalog_id].running
     assert tracking[METEOR_M_N2_4.norad_catalog_id].running
     assert settings.enabled_satellite_ids() == {METEOR_M_N2_4.norad_catalog_id}
 
-    second_card = panel.cards[METEOR_M_N2_4.norad_catalog_id]
     second_card.tune_button.click()
-    assert tuning_requests[-1].center_frequency_hz == METEOR_M_N2_4.lrpt_frequency_hz
-    assert context.state.receiver_settings.center_frequency_hz == (
-        METEOR_M_N2_4.lrpt_frequency_hz
+    assert (
+        tuning_requests[-1].center_frequency_hz
+        == METEOR_M_N2_4.receiver_frequency_hz
     )
-    assert receiver.settings.center_frequency_hz == METEOR_M_N2_4.lrpt_frequency_hz
+    assert context.state.receiver_settings.center_frequency_hz == (
+        METEOR_M_N2_4.receiver_frequency_hz
+    )
+    assert (
+        receiver.settings.center_frequency_hz == METEOR_M_N2_4.receiver_frequency_hz
+    )
+
+    noaa_card = panel.cards[NOAA_15.norad_catalog_id]
+    assert noaa_card.tune_button is not None
+    assert noaa_card.frequency.text() == "137.6200 MHz"
+    noaa_card.tune_button.click()
+    assert tuning_requests[-1].center_frequency_hz == NOAA_15.receiver_frequency_hz
+    assert receiver.settings.center_frequency_hz == NOAA_15.receiver_frequency_hz
+    noaa_card.enabled.click()
+    assert enabled_requests[-1] == (NOAA_15.norad_catalog_id, True)
+    assert tracking[NOAA_15.norad_catalog_id].running
+    assert settings.enabled_satellite_ids() == {
+        METEOR_M_N2_4.norad_catalog_id,
+        NOAA_15.norad_catalog_id,
+    }
 
     second_card.info_button.click()
     app.processEvents()

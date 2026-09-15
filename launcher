@@ -3,4 +3,4 @@ set -Eeuo pipefail
 
 PROJECT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_DIR"
-exec python3 "$PROJECT_DIR/src/main.py"
+exec python3 "$PROJECT_DIR/src/main.py" -name MeteorM

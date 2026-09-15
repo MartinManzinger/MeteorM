@@ -56,6 +56,9 @@ connected HackRF.
   menu, a geometrically centered application title, and
   minimize/maximize/close controls. Do not restore a separate menu row beneath
   it.
+- Qt application/window icons, the `MeteorM` desktop-file identity, launcher
+  X11 name, and desktop `StartupWMClass` are kept aligned so Linux taskbars can
+  resolve `info/master_icon.png`.
 - The World map and Application log panels are mandatory and cannot be closed.
 - Optional panels are imported lazily. Their inactive space remains clickable
   in the assigned grid position; there is no separate panel-loader area.
@@ -76,8 +79,8 @@ The current panel files and responsibilities are:
   export;
 - `panel_location.py` — manual coordinates, pasted coordinates/Google Maps URL
   parsing, and synchronization with map-selected coordinates;
-- `panel_satellite_tracking.py` — two independent Meteor satellite controls,
-  TLE status, manual fetch, information, and SDR tune actions;
+- `panel_satellite_tracking.py` — independent Meteor and NOAA controls, TLE
+  status, manual fetch, information, and LRPT/APT SDR tune actions;
 - `panel_sdr.py` — simulation/real-HackRF selection, discovery, synchronized
   numeric/slider controls with immediate settings updates, lifecycle controls,
   live sample counts, and backend errors;
@@ -96,10 +99,15 @@ The current panel files and responsibilities are:
 
 ### Satellite tracking
 
-- Both METEOR-M N2-3 (NORAD 57166) and N2-4 (NORAD 59051) are supported.
+- METEOR-M N2-3 (NORAD 57166), N2-4 (NORAD 59051), NOAA-15 (25338),
+  NOAA-18 (28654), and NOAA-19 (33591) are tracked independently.
+- Satellite cards use an accordion: only one details card is expanded at a
+  time, while all satellites remain available as compact headers in the
+  scrollable panel.
 - Each satellite has an independent activation checkbox, cached TLE record,
   worker, map color, information action, manual fetch action, and SDR tune
-  action.
+  action. Meteor entries use configured LRPT frequencies; NOAA entries use
+  their legacy APT frequencies. NOAA demodulation and decoding are not claimed.
 - `TLEProvider` separates orbital-data retrieval/cache policy from propagation.
 - `CelestrakTLEProvider` is the current replaceable provider.
 - Startup reads only validated cached TLE data and performs no automatic
@@ -128,8 +136,8 @@ The current panel files and responsibilities are:
 - Small crosses and local-time labels mark interpolated satellite positions at
   every wall-clock `XX:00` and `XX:30` in the past and future portions.
 - Right-clicking a current satellite circle offers an action to tune the SDR to
-  that satellite's configured LRPT center frequency. Right-clicking elsewhere
-  retains receiver-position selection.
+  that satellite's configured LRPT or legacy APT center frequency.
+  Right-clicking elsewhere retains receiver-position selection.
 
 ### Receiver integration, simulation, and visualization
 
@@ -181,7 +189,7 @@ The current panel files and responsibilities are:
   python3 -m pytest -q src/test
   ```
 
-- At the time of this update, the full suite contains 52 passing tests.
+- At the time of this update, the full suite contains 56 passing tests.
 - GUI tests use Qt's offscreen platform through `src/test/conftest.py`.
 
 ## Required directory and code structure

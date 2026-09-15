@@ -34,6 +34,8 @@ logger = logging.getLogger("meteor_m.gui")
 APPLICATION_ICON_PATH = (
     Path(__file__).resolve().parent.parent / "info" / "master_icon.png"
 )
+APPLICATION_NAME = "Meteor-M LRPT Station"
+APPLICATION_DESKTOP_ID = "MeteorM"
 APPEARANCE_MODES = ("green", "dark", "normal")
 SIMULATION_DEVICE = "Simulated HackRF One"
 HACKRF_AUTO_DEVICE = "HackRF One (auto)"
@@ -106,7 +108,8 @@ class SatelliteDefinition:
     display_name: str
     norad_catalog_id: int
     short_name: str
-    lrpt_frequency_hz: float
+    receiver_frequency_hz: float | None
+    receiver_mode: str | None
     map_color: str
     information_url: str
     summary: str
@@ -116,8 +119,13 @@ class SatelliteDefinition:
             raise ValueError("display_name must not be empty")
         if self.norad_catalog_id < 1:
             raise ValueError("norad_catalog_id must be positive")
-        if self.lrpt_frequency_hz <= 0:
-            raise ValueError("lrpt_frequency_hz must be positive")
+        if (
+            self.receiver_frequency_hz is not None
+            and self.receiver_frequency_hz <= 0
+        ):
+            raise ValueError("receiver_frequency_hz must be positive when provided")
+        if (self.receiver_frequency_hz is None) != (self.receiver_mode is None):
+            raise ValueError("receiver frequency and mode must be provided together")
 
 
 METEOR_M_N2_3 = SatelliteDefinition(
@@ -125,6 +133,7 @@ METEOR_M_N2_3 = SatelliteDefinition(
     57166,
     "M2-3",
     137_900_000.0,
+    "LRPT",
     "#55d7ff",
     "https://space.oscar.wmo.int/satellites/view/meteor_m_n2_3",
     "Operational meteorology satellite launched 27 June 2023 into an "
@@ -135,6 +144,7 @@ METEOR_M_N2_4 = SatelliteDefinition(
     59051,
     "M2-4",
     137_900_000.0,
+    "LRPT",
     "#ff6fb5",
     "https://space.oscar.wmo.int/satellites/view/meteor_m_n2_4",
     "Operational meteorology satellite launched 29 February 2024 into an "
@@ -142,6 +152,43 @@ METEOR_M_N2_4 = SatelliteDefinition(
 )
 
 METEOR_SATELLITES = (METEOR_M_N2_3, METEOR_M_N2_4)
+
+NOAA_15 = SatelliteDefinition(
+    "NOAA-15",
+    25338,
+    "NOAA-15",
+    137_620_000.0,
+    "APT",
+    "#ffd166",
+    "https://space.oscar.wmo.int/satellites/view/noaa_15",
+    "Legacy NOAA polar-orbiting weather satellite launched 13 May 1998; "
+    "included for tracking and manual APT tuning.",
+)
+NOAA_18 = SatelliteDefinition(
+    "NOAA-18",
+    28654,
+    "NOAA-18",
+    137_912_500.0,
+    "APT",
+    "#a98bff",
+    "https://space.oscar.wmo.int/satellites/view/noaa_18",
+    "Legacy NOAA polar-orbiting weather satellite launched 20 May 2005; "
+    "included for tracking and manual APT tuning.",
+)
+NOAA_19 = SatelliteDefinition(
+    "NOAA-19",
+    33591,
+    "NOAA-19",
+    137_100_000.0,
+    "APT",
+    "#ff8a65",
+    "https://space.oscar.wmo.int/satellites/view/noaa_19",
+    "Legacy NOAA polar-orbiting weather satellite launched 6 February 2009; "
+    "included for tracking and manual APT tuning.",
+)
+
+NOAA_SATELLITES = (NOAA_15, NOAA_18, NOAA_19)
+TRACKED_SATELLITES = (*METEOR_SATELLITES, *NOAA_SATELLITES)
 
 
 @dataclass(frozen=True, slots=True)
@@ -370,6 +417,15 @@ QLabel#panelSlotTitle {
     color: #a9bbcd; font-size: 11px; font-weight: 700; letter-spacing: 1px;
 }
 QLabel#dimLabel { color: #778ba2; }
+QMenu {
+    background: #111925; color: #d8e2ec; border: 1px solid #30425a;
+    padding: 4px;
+}
+QMenu::item {
+    background: transparent; border-radius: 3px; padding: 6px 28px 6px 10px;
+}
+QMenu::item:selected { background: #22344b; color: #ffffff; }
+QMenu::separator { background: #30425a; height: 1px; margin: 4px 7px; }
 QPushButton, QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit {
     background: #192434; border: 1px solid #30425a; border-radius: 4px; padding: 6px;
 }
@@ -397,6 +453,13 @@ QToolButton#panelChoiceButton:hover { color: #ffffff; }
 QToolButton#panelChoiceButton:checked {
     background: #176c87; border-radius: 3px; color: #ffffff;
 }
+QToolButton#satelliteAccordionHeader {
+    background: #192434; border: 1px solid #30425a; border-radius: 4px;
+    color: #d8e2ec; font-weight: 700; padding: 7px; text-align: left;
+}
+QToolButton#satelliteAccordionHeader:hover {
+    background: #22344b; border-color: #55d7ff;
+}
 QCheckBox { spacing: 7px; }
 QPlainTextEdit {
     background: #0c131c; border: 1px solid #293a50; border-radius: 4px;
@@ -415,6 +478,9 @@ QFrame#panelSlot[loaded="false"] {
 }
 QLabel#panelSlotTitle, QLabel#windowTitle { color: #c9e2d1; }
 QLabel#dimLabel { color: #7fa18a; }
+QMenu { background: #102019; color: #c9e2d1; border-color: #365e46; }
+QMenu::item:selected { background: #27784a; color: #ffffff; }
+QMenu::separator { background: #365e46; }
 QPushButton, QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit {
     background: #16271d; border-color: #365e46;
 }
@@ -429,6 +495,12 @@ QPushButton#panelPlaceholder:hover {
 }
 QToolButton#titleMenuButton:hover, QToolButton#windowControlButton:hover {
     background: #203c2b; color: #ffffff;
+}
+QToolButton#satelliteAccordionHeader {
+    background: #16271d; border-color: #365e46; color: #c9e2d1;
+}
+QToolButton#satelliteAccordionHeader:hover {
+    background: #203c2b; border-color: #71dc99;
 }
 QPlainTextEdit {
     background: #09120d; border-color: #294c37; color: #bed3c4;
@@ -794,12 +866,15 @@ class MainGUI(QMainWindow):
         self._slots: dict[str, PanelSlot] = {}
         self._panels: dict[str, QWidget] = {}
         self._appearance_actions: dict[str, QAction] = {}
-        self.setWindowTitle("Meteor-M LRPT Station")
+        self.setWindowTitle(APPLICATION_NAME)
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
         application_icon = QIcon(str(APPLICATION_ICON_PATH))
         self.setWindowIcon(application_icon)
         application = QApplication.instance()
         if application is not None:
+            application.setApplicationName(APPLICATION_NAME)
+            application.setApplicationDisplayName(APPLICATION_NAME)
+            application.setDesktopFileName(APPLICATION_DESKTOP_ID)
             application.setWindowIcon(application_icon)
         self.resize(*window_size)
         self.setMinimumSize(1050, 700)

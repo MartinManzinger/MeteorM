@@ -278,8 +278,8 @@ class OrbitMapWidget(QWidget):
         self.setMinimumSize(520, 255)
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setToolTip(
-            "Right-click a satellite to tune the SDR; right-click elsewhere "
-            "to set the receiver location"
+            "Right-click a satellite to tune the SDR to its configured LRPT or APT "
+            "frequency. Right-click elsewhere to set the receiver location."
         )
 
     def set_appearance(self, appearance_mode: str) -> None:
@@ -343,15 +343,21 @@ class OrbitMapWidget(QWidget):
     ) -> None:
         menu = QMenu(self)
         satellite = snapshot.satellite
-        tune = menu.addAction(
-            f"Tune SDR to {satellite.lrpt_frequency_hz / 1e6:.4f} MHz "
-            f"({satellite.short_name})"
-        )
-        tune.triggered.connect(
-            lambda checked=False: self.satellite_tune_requested.emit(
-                satellite.norad_catalog_id
+        if satellite.receiver_frequency_hz is not None:
+            tune = menu.addAction(
+                f"Tune SDR to {satellite.receiver_frequency_hz / 1e6:.4f} MHz "
+                f"({satellite.short_name})"
             )
-        )
+            tune.triggered.connect(
+                lambda checked=False: self.satellite_tune_requested.emit(
+                    satellite.norad_catalog_id
+                )
+            )
+        else:
+            trajectory_only = menu.addAction(
+                f"{satellite.short_name} · trajectory only"
+            )
+            trajectory_only.setEnabled(False)
         menu.addSeparator()
         select_location = menu.addAction("Set receiver position here")
         select_location.triggered.connect(
@@ -687,10 +693,10 @@ class Panel(OrbitMapWidget):
 
     def _request_satellite_tune(self, norad_catalog_id: int) -> None:
         snapshot = self._snapshots.get(norad_catalog_id)
-        if snapshot is None:
+        if snapshot is None or snapshot.satellite.receiver_frequency_hz is None:
             return
         receiver_settings = replace(
             self.context.state.receiver_settings,
-            center_frequency_hz=snapshot.satellite.lrpt_frequency_hz,
+            center_frequency_hz=snapshot.satellite.receiver_frequency_hz,
         )
         self.context.bus.receiver_settings_requested.emit(receiver_settings)

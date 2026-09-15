@@ -1,43 +1,71 @@
-"""Optional controls and status for both Meteor-M tracking services."""
+"""Optional controls and status for Meteor-M and NOAA orbit tracking."""
 
 from __future__ import annotations
 
 import logging
 from dataclasses import replace
 
-from PySide6.QtCore import QSignalBlocker, Qt
+from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QGridLayout,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from gui import METEOR_SATELLITES, OrbitSnapshot, PanelContext, SatelliteDefinition
+from gui import (
+    METEOR_SATELLITES,
+    NOAA_SATELLITES,
+    OrbitSnapshot,
+    PanelContext,
+    SatelliteDefinition,
+)
 
 
 logger = logging.getLogger("meteor_m.panel.satellite_tracking")
 
 
 class SatelliteCard(QGroupBox):
+    expansion_requested = Signal(bool)
+
     def __init__(self, satellite: SatelliteDefinition, context: PanelContext) -> None:
-        super().__init__(satellite.display_name)
+        super().__init__()
         self.satellite = satellite
         self.context = context
         catalog_id = satellite.norad_catalog_id
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
 
-        self.enabled = QCheckBox(f"Active · NORAD {catalog_id}")
+        self.header = QToolButton()
+        self.header.setObjectName("satelliteAccordionHeader")
+        self.header.setText(satellite.display_name)
+        self.header.setCheckable(True)
+        self.header.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.header.setArrowType(Qt.ArrowType.RightArrow)
+        self.header.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        layout.addWidget(self.header)
+
+        self.details = QWidget()
+        details_layout = QVBoxLayout(self.details)
+        details_layout.setContentsMargins(7, 3, 7, 7)
+        details_layout.setSpacing(5)
+        layout.addWidget(self.details)
+
+        self.enabled = QCheckBox(f"Track · NORAD {catalog_id}")
         self.enabled.setToolTip("Activate tracking and the colored map overlay")
         self.enabled.setObjectName(f"satelliteEnabled_{catalog_id}")
         self.enabled.setChecked(catalog_id in context.state.enabled_satellite_ids)
-        layout.addWidget(self.enabled)
+        details_layout.addWidget(self.enabled)
 
         grid = QGridLayout()
         self.worker = QLabel("STOPPED")
@@ -46,7 +74,12 @@ class SatelliteCard(QGroupBox):
         self.source = QLabel("--")
         self.epoch = QLabel("--")
         self.retrieved = QLabel("--")
-        self.frequency = QLabel(f"{satellite.lrpt_frequency_hz / 1e6:.4f} MHz")
+        receiver_supported = satellite.receiver_frequency_hz is not None
+        self.frequency = QLabel(
+            f"{satellite.receiver_frequency_hz / 1e6:.4f} MHz"
+            if receiver_supported
+            else "Trajectory only"
+        )
         for row, (name, value) in enumerate(
             (
                 ("Worker", self.worker),
@@ -55,7 +88,12 @@ class SatelliteCard(QGroupBox):
                 ("TLE source", self.source),
                 ("TLE epoch", self.epoch),
                 ("Fetched", self.retrieved),
-                ("LRPT tune", self.frequency),
+                (
+                    f"{satellite.receiver_mode} tune"
+                    if receiver_supported
+                    else "Receiver support",
+                    self.frequency,
+                ),
             )
         ):
             label = QLabel(name)
@@ -64,34 +102,54 @@ class SatelliteCard(QGroupBox):
             value.setWordWrap(True)
             grid.addWidget(label, row, 0)
             grid.addWidget(value, row, 1)
-        layout.addLayout(grid)
+        details_layout.addLayout(grid)
 
-        buttons = QHBoxLayout()
+        buttons = QGridLayout()
         self.fetch_button = QPushButton("Fetch TLE")
         self.fetch_button.setObjectName(f"fetchTle_{catalog_id}")
         self.fetch_button.setToolTip(
             "Request this satellite from CelesTrak in the worker thread and store "
             "validated data in settings.yaml. The two-hour limit still applies."
         )
-        self.tune_button = QPushButton("Tune SDR")
-        self.tune_button.setObjectName(f"tuneSdr_{catalog_id}")
-        self.tune_button.setToolTip(
-            f"Set SDR center frequency to {satellite.lrpt_frequency_hz / 1e6:.4f} MHz"
-        )
+        self.tune_button: QPushButton | None = None
+        if satellite.receiver_frequency_hz is not None:
+            self.tune_button = QPushButton("Tune SDR")
+            self.tune_button.setObjectName(f"tuneSdr_{catalog_id}")
+            self.tune_button.setToolTip(
+                "Set SDR center frequency to "
+                f"{satellite.receiver_frequency_hz / 1e6:.4f} MHz"
+            )
         self.info_button = QPushButton("Info…")
         self.info_button.setObjectName(f"satelliteInfo_{catalog_id}")
-        buttons.addWidget(self.fetch_button)
-        buttons.addWidget(self.tune_button)
-        buttons.addWidget(self.info_button)
-        layout.addLayout(buttons)
+        buttons.addWidget(self.fetch_button, 0, 0)
+        if self.tune_button is not None:
+            buttons.addWidget(self.tune_button, 0, 1)
+        buttons.addWidget(self.info_button, 1, 0, 1, 2)
+        details_layout.addLayout(buttons)
 
         self.enabled.toggled.connect(self._request_enabled)
         self.fetch_button.clicked.connect(
             lambda checked=False: context.bus.tle_refresh_requested.emit(catalog_id)
         )
-        self.tune_button.clicked.connect(self._tune_receiver)
+        if self.tune_button is not None:
+            self.tune_button.clicked.connect(self._tune_receiver)
         self.info_button.clicked.connect(self._show_information)
+        self.header.toggled.connect(self.expansion_requested.emit)
         self._set_controls_enabled(self.enabled.isChecked())
+        self.set_expanded(False)
+
+    @property
+    def expanded(self) -> bool:
+        return self.header.isChecked()
+
+    def set_expanded(self, expanded: bool) -> None:
+        blocker = QSignalBlocker(self.header)
+        self.header.setChecked(expanded)
+        del blocker
+        self.header.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        )
+        self.details.setVisible(expanded)
 
     def set_enabled(self, enabled: bool) -> None:
         blocker = QSignalBlocker(self.enabled)
@@ -140,15 +198,17 @@ class SatelliteCard(QGroupBox):
         self.fetch_button.setEnabled(enabled)
 
     def _tune_receiver(self) -> None:
+        if self.satellite.receiver_frequency_hz is None:
+            return
         settings = replace(
             self.context.state.receiver_settings,
-            center_frequency_hz=self.satellite.lrpt_frequency_hz,
+            center_frequency_hz=self.satellite.receiver_frequency_hz,
         )
         self.context.bus.receiver_settings_requested.emit(settings)
         logger.info(
             "Requested SDR tune for %s at %.4f MHz",
             self.satellite.display_name,
-            self.satellite.lrpt_frequency_hz / 1e6,
+            self.satellite.receiver_frequency_hz / 1e6,
         )
 
     def _show_information(self) -> None:
@@ -156,15 +216,27 @@ class SatelliteCard(QGroupBox):
         self._information_message = message
         message.setWindowTitle(self.satellite.display_name)
         message.setIcon(QMessageBox.Icon.Information)
+        receiver_frequency = self.satellite.receiver_frequency_hz
+        receiver_detail = (
+            f"Configured {self.satellite.receiver_mode} tune: "
+            f"{receiver_frequency / 1e6:.4f} MHz"
+            if receiver_frequency is not None
+            else "Receiver support: trajectory display only"
+        )
         message.setText(
             f"<b>{self.satellite.display_name}</b><br>"
             f"NORAD catalog ID: {self.satellite.norad_catalog_id}<br>"
-            f"Configured LRPT tune: {self.satellite.lrpt_frequency_hz / 1e6:.4f} MHz"
+            f"{receiver_detail}"
+        )
+        reception_note = (
+            "Meteor LRPT can switch among its assigned frequencies; verify current "
+            "transmission status when reception fails."
+            if self.satellite.receiver_mode == "LRPT"
+            else "The SDR can tune this legacy APT frequency, but this application "
+            "does not demodulate or decode NOAA transmissions."
         )
         message.setInformativeText(
-            f"{self.satellite.summary}\n\n"
-            "Meteor LRPT can switch among its assigned frequencies; verify current "
-            "transmission status when reception fails.\n\n"
+            f"{self.satellite.summary}\n\n{reception_note}\n\n"
             f"WMO OSCAR: {self.satellite.information_url}"
         )
         message.setStandardButtons(QMessageBox.StandardButton.Close)
@@ -177,22 +249,38 @@ class Panel(QScrollArea):
         self.context = context
         self.setWidgetResizable(True)
         self.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         content = QWidget()
         layout = QVBoxLayout(content)
         explanation = QLabel(
-            "Activate either satellite independently. Active workers calculate local "
-            "SGP4 positions and send distinct overlays to the mandatory map."
+            "Expand one satellite at a time. Tracking controls its map trajectory; "
+            "NOAA APT tuning is available without decoding."
         )
         explanation.setWordWrap(True)
         explanation.setObjectName("dimLabel")
         layout.addWidget(explanation)
 
+        all_satellites = (*METEOR_SATELLITES, *NOAA_SATELLITES)
         self.cards = {
             satellite.norad_catalog_id: SatelliteCard(satellite, context)
-            for satellite in METEOR_SATELLITES
+            for satellite in all_satellites
         }
-        for card in self.cards.values():
-            layout.addWidget(card)
+        for heading, satellites in (
+            ("Meteor-M LRPT", METEOR_SATELLITES),
+            ("NOAA APT tracking", NOAA_SATELLITES),
+        ):
+            label = QLabel(heading)
+            label.setObjectName("sectionTitle")
+            layout.addWidget(label)
+            for satellite in satellites:
+                layout.addWidget(self.cards[satellite.norad_catalog_id])
+        for catalog_id, card in self.cards.items():
+            card.expansion_requested.connect(
+                lambda expanded, selected=catalog_id: self._set_expanded_card(
+                    selected, expanded
+                )
+            )
+        self._set_expanded_card(all_satellites[0].norad_catalog_id, True)
         layout.addStretch()
         self.setWidget(content)
 
@@ -209,6 +297,16 @@ class Panel(QScrollArea):
         for catalog_id in context.state.running_satellite_ids:
             if catalog_id in self.cards:
                 self.cards[catalog_id].set_running(True)
+
+    def _set_expanded_card(self, catalog_id: int, expanded: bool) -> None:
+        card = self.cards.get(catalog_id)
+        if card is None:
+            return
+        if not expanded:
+            card.set_expanded(False)
+            return
+        for current_id, current_card in self.cards.items():
+            current_card.set_expanded(current_id == catalog_id)
 
     def _show_orbit(self, snapshot: OrbitSnapshot) -> None:
         card = self.cards.get(snapshot.satellite.norad_catalog_id)

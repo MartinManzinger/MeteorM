@@ -30,13 +30,13 @@ from skyfield.api import EarthSatellite, load, wgs84
 
 from gui import (
     APPEARANCE_MODES,
+    APPLICATION_DESKTOP_ID,
+    APPLICATION_NAME,
     HACKRF_AUTO_DEVICE,
     SIMULATION_DEVICE,
     AppEventBus,
     ApplicationState,
     MainGUI,
-    METEOR_M_N2_3,
-    METEOR_M_N2_4,
     OrbitSnapshot,
     PanelContext,
     RECEIVER_SAMPLE_RATE_MAX_HZ,
@@ -49,6 +49,7 @@ from gui import (
     SatelliteDefinition,
     SatellitePosition,
     SpectrumFrame,
+    TRACKED_SATELLITES,
     TLERecord,
     configure_application_style,
     normalize_appearance_mode,
@@ -148,8 +149,7 @@ class SettingsStore:
     def enabled_satellite_ids(self) -> set[int]:
         with self._lock:
             known_ids = {
-                METEOR_M_N2_3.norad_catalog_id,
-                METEOR_M_N2_4.norad_catalog_id,
+                satellite.norad_catalog_id for satellite in TRACKED_SATELLITES
             }
             raw = self._data["satellite"].get(
                 "enabled_norad_catalog_ids", sorted(known_ids)
@@ -243,8 +243,7 @@ class SettingsStore:
 
     def update_enabled_satellites(self, catalog_ids: set[int]) -> None:
         known_ids = {
-            METEOR_M_N2_3.norad_catalog_id,
-            METEOR_M_N2_4.norad_catalog_id,
+            satellite.norad_catalog_id for satellite in TRACKED_SATELLITES
         }
         with self._lock:
             self._data["satellite"]["enabled_norad_catalog_ids"] = sorted(
@@ -1972,13 +1971,15 @@ def make_tracking_services(
                 satellite_settings["ground_track_refresh_seconds"]
             ),
         )
-        for satellite in (METEOR_M_N2_3, METEOR_M_N2_4)
+        for satellite in TRACKED_SATELLITES
     }
 
 
 def main() -> int:
     app = QApplication(sys.argv)
-    app.setApplicationName("Meteor-M LRPT Station")
+    app.setApplicationName(APPLICATION_NAME)
+    app.setApplicationDisplayName(APPLICATION_NAME)
+    app.setDesktopFileName(APPLICATION_DESKTOP_ID)
     settings = SettingsStore()
     configure_application_style(app, settings.appearance_mode())
     state = ApplicationState(

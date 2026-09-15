@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QWidget
 
 from gui import (
+    APPLICATION_DESKTOP_ID,
     APPLICATION_ICON_PATH,
     AppEventBus,
     ApplicationState,
@@ -50,6 +51,8 @@ def test_icon_and_settings_share_the_custom_window_title_strip() -> None:
     assert APPLICATION_ICON_PATH.is_file()
     assert window.windowFlags() & Qt.WindowType.FramelessWindowHint
     assert not window.windowIcon().isNull()
+    assert app.desktopFileName() == APPLICATION_DESKTOP_ID
+    assert not app.windowIcon().isNull()
     assert window.title_bar.icon_label.pixmap() is not None
     assert not window.title_bar.icon_label.pixmap().isNull()
     assert window.title_bar.settings_button.menu() is window.settings_menu
@@ -66,6 +69,15 @@ def test_icon_and_settings_share_the_custom_window_title_strip() -> None:
 
     window.close()
     app.processEvents()
+
+
+def test_linux_launcher_matches_the_qt_desktop_identity() -> None:
+    project_root = APPLICATION_ICON_PATH.parent.parent
+    desktop_entry = (project_root / "MeteorM.desktop").read_text(encoding="utf-8")
+    launcher = (project_root / "launcher").read_text(encoding="utf-8")
+
+    assert f"StartupWMClass={APPLICATION_DESKTOP_ID}" in desktop_entry
+    assert f"-name {APPLICATION_DESKTOP_ID}" in launcher
 
 
 def test_sdr_sliders_are_synchronized_and_apply_immediately() -> None:

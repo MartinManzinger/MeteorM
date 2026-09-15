@@ -1,4 +1,4 @@
-from gui import ReceiverLocation, ReceiverSettings
+from gui import NOAA_15, ReceiverLocation, ReceiverSettings
 from main import SettingsStore
 
 
@@ -21,7 +21,7 @@ def test_settings_store_persists_all_values_in_one_yaml_file(tmp_path) -> None:
     store.update_location(location)
     store.update_log_verbosity("DEBUG")
     store.update_appearance_mode("normal")
-    store.update_enabled_satellites({57166})
+    store.update_enabled_satellites({57166, NOAA_15.norad_catalog_id})
     store.save_tle(59051, {"name": "METEOR-M2 4", "line1": "one", "line2": "two"})
 
     reloaded = SettingsStore(path)
@@ -29,7 +29,7 @@ def test_settings_store_persists_all_values_in_one_yaml_file(tmp_path) -> None:
     assert reloaded.receiver_location() == location
     assert reloaded.log_verbosity() == "DEBUG"
     assert reloaded.appearance_mode() == "normal"
-    assert reloaded.enabled_satellite_ids() == {57166}
+    assert reloaded.enabled_satellite_ids() == {57166, NOAA_15.norad_catalog_id}
     assert reloaded.load_tle(59051)["line2"] == "two"
     assert not list(tmp_path.glob("*.tmp"))
 

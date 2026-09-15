@@ -6,7 +6,14 @@ from urllib.error import URLError
 
 import pytest
 
-from gui import METEOR_M_N2_4, TLERecord
+from gui import (
+    METEOR_M_N2_4,
+    NOAA_15,
+    NOAA_18,
+    NOAA_19,
+    TRACKED_SATELLITES,
+    TLERecord,
+)
 from main import (
     CelestrakTLEProvider,
     SatelliteTracker,
@@ -14,6 +21,7 @@ from main import (
     SettingsStore,
     TLEProvider,
     TLEProviderError,
+    make_tracking_services,
 )
 
 
@@ -81,6 +89,31 @@ def tle_record() -> TLERecord:
         retrieved_at=RETRIEVED_AT,
         source_url="https://example.test/tle",
     )
+
+
+def test_tracking_service_catalog_includes_meteor_and_noaa(tmp_path) -> None:
+    services = make_tracking_services(SettingsStore(tmp_path / "settings.yaml"))
+
+    assert set(services) == {
+        satellite.norad_catalog_id for satellite in TRACKED_SATELLITES
+    }
+    assert {service.satellite for service in services.values()} == set(
+        TRACKED_SATELLITES
+    )
+
+
+def test_noaa_catalog_uses_legacy_apt_tune_frequencies() -> None:
+    assert {
+        satellite.norad_catalog_id: satellite.receiver_frequency_hz
+        for satellite in (NOAA_15, NOAA_18, NOAA_19)
+    } == {
+        25338: 137_620_000.0,
+        28654: 137_912_500.0,
+        33591: 137_100_000.0,
+    }
+    assert {satellite.receiver_mode for satellite in (NOAA_15, NOAA_18, NOAA_19)} == {
+        "APT"
+    }
 
 
 def test_celestrak_provider_downloads_validates_and_reuses_cache(tmp_path) -> None:

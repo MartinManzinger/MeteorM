@@ -8,4 +8,5 @@ Path=/home/martin/Desktop/MeteorM
 Icon=/home/martin/Desktop/MeteorM/info/master_icon.png
 Terminal=false
 StartupNotify=true
+StartupWMClass=MeteorM
 Categories=Science;
